@@ -421,7 +421,7 @@ class SteamGamePlugin(Star):
             self._save_bindings()
         return steam_id
 
-    @filter.command("绑定steam", prefix_optional=True)
+    @filter.command("绑定steam")
     async def bind(self, event: AstrMessageEvent, steam_id: str = ""):
         """绑定 Steam ID（在新的群聊中可不填参数同步已有绑定）"""
         user_id = str(event.get_sender_id())
@@ -563,21 +563,21 @@ class SteamGamePlugin(Star):
         )
         yield event.image_result(img_url)
 
-    @filter.command("steam动态", prefix_optional=True)
+    @filter.command("steam动态")
     async def steam_activity(self, event: AstrMessageEvent, arg: str = ""):
         """查看 Steam 动态 (头像 + 最近活动)"""
         steam_id = await self._resolve_target(event, arg)
         async for result in self._render_profile(event, steam_id, "summary"):
             yield result
 
-    @filter.command("steam游戏库", prefix_optional=True)
+    @filter.command("steam游戏库")
     async def steam_library(self, event: AstrMessageEvent, arg: str = ""):
         """查看 Steam 完整游戏库 (Mosaic 墙)"""
         steam_id = await self._resolve_target(event, arg)
         async for result in self._render_profile(event, steam_id, "library"):
             yield result
 
-    @filter.command("steam成就", prefix_optional=True)
+    @filter.command("steam成就")
     async def steam_achievement(self, event: AstrMessageEvent, game_name: str):
         """查看 Steam 游戏成就 (/steam成就 <游戏名>)"""
         if not game_name:
@@ -708,7 +708,7 @@ class SteamGamePlugin(Star):
         )
         yield event.image_result(img_url)
 
-    @filter.command("steam对比", prefix_optional=True)
+    @filter.command("steam对比")
     async def steam_compare(self, event: AstrMessageEvent, target: str):
         """对比两人游戏库 (/steam对比 @User)"""
         # Fix: Directly get sender's ID from binding, don't use _resolve_target(event, "")
@@ -843,7 +843,7 @@ class SteamGamePlugin(Star):
         )
         yield event.image_result(img_url)
 
-    @filter.command("steam推荐", prefix_optional=True)
+    @filter.command("steam推荐")
     async def steam_recommend(self, event: AstrMessageEvent, arg: str = ""):
         """群友热门游戏推荐 (/steam推荐 [@用户])"""
         group_id = event.get_group_id()
@@ -975,7 +975,7 @@ class SteamGamePlugin(Star):
         )
         yield event.image_result(img_url)
 
-    @filter.command("steam联动", prefix_optional=True)
+    @filter.command("steam联动")
     async def steam_network(self, event: AstrMessageEvent):
         """群内 Steam 好友联动与同玩提醒"""
         group_id = event.get_group_id()
@@ -1057,7 +1057,7 @@ class SteamGamePlugin(Star):
 
         yield event.plain_result("\n".join(lines))
 
-    @filter.command("steam排行", prefix_optional=True)
+    @filter.command("steam排行")
     async def steam_top(self, event: AstrMessageEvent, dimension: str = "游戏数"):
         """群内排行 (/steam排行 [游戏数/时长])"""
         group_id = event.get_group_id()
