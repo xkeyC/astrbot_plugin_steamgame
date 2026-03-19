@@ -11,6 +11,7 @@ from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api import logger
 from astrbot.api import message_components as Comp
+from astrbot.api import llm_tool
 from .steam_api import SteamAPI
 from .utils.browser import render_html_to_image
 from .utils.env_manager import EnvManager
@@ -803,11 +804,248 @@ class SteamGamePlugin(Star):
         img_url = await self._render_html_local(
             template_content,
             render_data,
-            width=700,
+            width=800,
             image_type="jpeg",
             quality=self.image_quality,
         )
         yield event.image_result(img_url)
+
+    # ==================== LLM Tools ====================
+
+    @llm_tool(name="get_steam_library")
+    async def get_steam_library(
+        self, event: AstrMessageEvent, steam_id: str = ""
+    ) -> str:
+        """获取用户的Steam游戏库信息，包括游戏数量、总游戏时长、最近游玩的游戏等。
+        当用户询问自己的游戏库、拥有哪些游戏、游戏时长统计时调用此工具。
+
+        Args:
+            steam_id(string): 可选。用户的Steam64ID（17位数字，以7656开头）。如果不提供，则使用当前用户的绑定。
+
+        Returns:
+            str: 游戏库信息的文本描述，包含游戏数量、总时长、最近游玩游戏等
+        """
+        user_id = str(event.get_sender_id())
+        target_steam_id = steam_id.strip() if steam_id else None
+
+        # Validate Steam64ID format if provided
+        if target_steam_id:
+            if not (
+                target_steam_id.isdigit()
+                and len(target_steam_id) == 17
+                and target_steam_id.startswith("7656")
+            ):
+                return f"错误：提供的Steam ID格式不正确。Steam64ID应为17位数字且以7656开头。"
+
+        # If no steam_id provided, check user's binding
+        if not target_steam_id:
+            target_steam_id = self.bindings.get(user_id)
+            if not target_steam_id:
+                return f"您尚未绑定Steam账号。请使用 `/绑定steam <Steam64ID>` 进行绑定，或在使用此工具时提供Steam64ID参数。"
+
+        # Fetch player summary
+        summary = await self.steam_api.get_player_summaries(target_steam_id)
+        if not summary:
+            return f"无法获取Steam用户信息，请检查ID是否正确或API Key是否配置。"
+
+        player_name = summary.get("personaname", "未知用户")
+
+        # Check privacy
+        is_private = summary.get("communityvisibilitystate", 1) != 3
+        if is_private:
+            return f"用户 {player_name} 的Steam资料是私密的，无法获取游戏库信息。"
+
+        # Fetch owned games
+        owned_games = await self.steam_api.get_owned_games(target_steam_id)
+        if not owned_games:
+            return f"用户 {player_name} 的游戏库为空或无法访问。"
+
+        # Calculate stats
+        total_games = len(owned_games)
+        total_minutes = sum(g.get("playtime_forever", 0) for g in owned_games)
+        total_hours = total_minutes / 60
+
+        # Sort by playtime for top games
+        sorted_games = sorted(
+            owned_games, key=lambda x: x.get("playtime_forever", 0), reverse=True
+        )
+        top_games = sorted_games[:10]
+
+        # Get recently played games
+        recent_games = await self.steam_api.get_recently_played_games(target_steam_id)
+
+        # Format result
+        lines = [f"🎮 {player_name} 的Steam游戏库"]
+        lines.append(f"- 游戏总数：{total_games} 款")
+        lines.append(
+            f"- 总游戏时长：{self._format_playtime(total_minutes)} ({total_hours:.1f}小时)"
+        )
+
+        if top_games:
+            lines.append(f"\n📊 游玩时长最多的游戏（前10款）：")
+            for i, game in enumerate(top_games, 1):
+                name = game.get("name", "未知游戏")
+                hours = game.get("playtime_forever", 0) / 60
+                lines.append(f"  {i}. {name} - {hours:.1f}小时")
+
+        if recent_games:
+            lines.append(f"\n🕐 最近2周游玩的游戏：")
+            for game in recent_games[:5]:
+                name = game.get("name", "未知游戏")
+                hours_2weeks = game.get("playtime_2weeks", 0) / 60
+                lines.append(f"  - {name} - {hours_2weeks:.1f}小时")
+
+        # Check currently playing
+        if summary.get("gameextrainfo"):
+            lines.append(f"\n▶️ 当前正在玩：{summary.get('gameextrainfo')}")
+
+        return "\n".join(lines)
+
+    @llm_tool(name="get_steam_activity")
+    async def get_steam_activity(
+        self, event: AstrMessageEvent, steam_id: str = ""
+    ) -> str:
+        """获取用户的Steam最近动态和活动状态，包括在线状态、正在玩的游戏、最近游玩记录等。
+        当用户询问自己的Steam状态、最近在玩什么游戏、是否在线时调用此工具。
+
+        Args:
+            steam_id(string): 可选。用户的Steam64ID（17位数字，以7656开头）。如果不提供，则使用当前用户的绑定。
+
+        Returns:
+            str: Steam活动状态的文本描述
+        """
+        user_id = str(event.get_sender_id())
+        target_steam_id = steam_id.strip() if steam_id else None
+
+        # Validate Steam64ID format if provided
+        if target_steam_id:
+            if not (
+                target_steam_id.isdigit()
+                and len(target_steam_id) == 17
+                and target_steam_id.startswith("7656")
+            ):
+                return f"错误：提供的Steam ID格式不正确。Steam64ID应为17位数字且以7656开头。"
+
+        # If no steam_id provided, check user's binding
+        if not target_steam_id:
+            target_steam_id = self.bindings.get(user_id)
+            if not target_steam_id:
+                return f"您尚未绑定Steam账号。请使用 `/绑定steam <Steam64ID>` 进行绑定，或在使用此工具时提供Steam64ID参数。"
+
+        # Fetch player summary
+        summary = await self.steam_api.get_player_summaries(
+            target_steam_id, force_refresh=True
+        )
+        if not summary:
+            return f"无法获取Steam用户信息，请检查ID是否正确或API Key是否配置。"
+
+        player_name = summary.get("personaname", "未知用户")
+
+        # Parse online status
+        persona_state = summary.get("personastate", 0)
+        status_map = {
+            0: "离线",
+            1: "在线",
+            2: "忙碌",
+            3: "离开",
+            4: "打盹",
+            5: "想交易",
+            6: "想玩",
+        }
+        status = status_map.get(persona_state, "未知")
+
+        lines = [f"👤 {player_name} 的Steam状态"]
+        lines.append(f"- 当前状态：{status}")
+
+        # Check if playing a game
+        game_info = summary.get("gameextrainfo")
+        game_id = summary.get("gameid")
+        if game_info:
+            lines.append(f"- 正在游玩：{game_info}")
+            if game_id:
+                lines.append(f"- 游戏ID：{game_id}")
+        else:
+            lines.append(f"- 当前未在游戏中")
+
+        # Last logoff time
+        last_logoff = summary.get("lastlogoff")
+        if last_logoff:
+            from datetime import datetime
+
+            logoff_time = datetime.fromtimestamp(last_logoff)
+            lines.append(f"- 上次在线：{logoff_time.strftime('%Y-%m-%d %H:%M')}")
+
+        # Check privacy
+        is_private = summary.get("communityvisibilitystate", 1) != 3
+        if is_private:
+            lines.append(f"\n⚠️ 注意：该用户的Steam资料是私密的，部分信息可能无法获取。")
+        else:
+            # Get recently played games
+            recent_games = await self.steam_api.get_recently_played_games(
+                target_steam_id
+            )
+            if recent_games:
+                lines.append(f"\n🕐 最近2周游玩的游戏：")
+                for game in recent_games[:5]:
+                    name = game.get("name", "未知游戏")
+                    hours_2weeks = game.get("playtime_2weeks", 0) / 60
+                    total_hours = game.get("playtime_forever", 0) / 60
+                    lines.append(f"  - {name}")
+                    lines.append(
+                        f"    近2周：{hours_2weeks:.1f}小时 | 总计：{total_hours:.1f}小时"
+                    )
+
+        return "\n".join(lines)
+
+    @llm_tool(name="bind_steam_account")
+    async def bind_steam_account(self, event: AstrMessageEvent, steam_id: str) -> str:
+        """帮助用户绑定Steam账号到当前平台账号。绑定后可以使用其他Steam相关工具查询自己的游戏库和动态。
+        当用户想要绑定Steam账号、查询自己的Steam信息但尚未绑定时调用此工具。
+
+        Args:
+            steam_id(string): 用户的Steam64ID（17位数字，以7656开头）。可以从Steam个人资料URL获取。
+
+        Returns:
+            str: 绑定结果的提示信息
+        """
+        if not steam_id:
+            return "错误：请提供Steam64ID。您可以在Steam个人资料页面的URL中找到，例如：https://steamcommunity.com/profiles/76561198xxxxxxxxxx/"
+
+        steam_id = steam_id.strip()
+
+        # Validate Steam ID format
+        if not steam_id.isdigit():
+            return f"错误：Steam ID必须是数字。您提供的ID包含非数字字符。"
+
+        if len(steam_id) != 17:
+            return f"错误：Steam64ID必须是17位数字。您提供的ID是{len(steam_id)}位。"
+
+        if not steam_id.startswith("7656"):
+            return f"错误：Steam64ID应以7656开头。请确认您使用的是64位Steam ID。"
+
+        user_id = str(event.get_sender_id())
+        group_id = event.get_group_id()
+
+        # Verify the Steam ID is valid by fetching player summary
+        summary = await self.steam_api.get_player_summaries(steam_id)
+        if not summary:
+            return f"无法验证Steam ID，请确认ID是否正确，或检查Steam API Key配置。"
+
+        player_name = summary.get("personaname", "未知用户")
+
+        # Perform binding
+        self.bindings[user_id] = steam_id
+
+        # Update group binding
+        save_needed = False
+        if self._sync_group_binding_value(user_id):
+            save_needed = True
+        if group_id and self._link_user_to_group(user_id, group_id):
+            save_needed = True
+
+        self._save_bindings()
+
+        return f"✅ Steam账号绑定成功！\n\n用户：{player_name}\nSteam64ID：{steam_id}\n\n您现在可以使用 `/steam动态`、`/steam游戏库` 等命令查看自己的Steam信息，也可以让AI助手帮您查询游戏库和动态。"
 
     @filter.command("steam对比")
     async def steam_compare(self, event: AstrMessageEvent, target: str = ""):
