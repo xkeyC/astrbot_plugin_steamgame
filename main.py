@@ -402,11 +402,11 @@ class SteamGamePlugin(Star):
         return filepath
 
     async def _resolve_target(
-        self, event: AstrMessageEvent, arg: str, allow_fallback: bool = True
+        self, event: AstrMessageEvent, target: str, allow_fallback: bool = True
     ) -> str:
         """
         Resolve Steam ID from argument.
-        Arg can be:
+        Target can be:
         - Empty: Use sender's bound ID.
         - @Mention: Use mentioned user's bound ID.
         - Digits: Use as Steam ID directly.
@@ -430,9 +430,9 @@ class SteamGamePlugin(Star):
 
         # 2. Check if explicit ID (digits)
         if (
-            not steam_id and arg and arg.isdigit() and len(arg) > 10
+            not steam_id and target and target.isdigit() and len(target) > 10
         ):  # Simple check for Steam ID format
-            steam_id = arg
+            steam_id = target
 
         # 3. Default: Use sender's ID
         if not steam_id and allow_fallback:
