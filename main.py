@@ -814,30 +814,50 @@ class SteamGamePlugin(Star):
 
     @llm_tool(name="get_steam_library")
     async def get_steam_library(
-        self, event: AstrMessageEvent, steam_id: str = ""
+        self, event: AstrMessageEvent, steam_id: str = "", target_user_id: str = ""
     ) -> str:
         """获取用户的Steam游戏库信息，包括游戏数量、总游戏时长、最近游玩的游戏等。
-        当用户询问自己的游戏库、拥有哪些游戏、游戏时长统计时调用此工具。
+        当用户询问自己的游戏库、拥有哪些游戏、游戏时长统计，或查询@某人的游戏库时调用此工具。
 
         Args:
             steam_id(string): 可选。用户的Steam64ID（17位数字，以7656开头）。如果不提供，则使用当前用户的绑定。
+            target_user_id(string): 可选。目标用户的平台ID（如QQ号），用于查询@某人的游戏库。如果消息中有@某人，应该传入被@用户的ID。
 
         Returns:
             str: 游戏库信息的文本描述，包含游戏数量、总时长、最近游玩游戏等
         """
         user_id = str(event.get_sender_id())
-        target_steam_id = steam_id.strip() if steam_id else None
+        target_steam_id = None
 
-        # Validate Steam64ID format if provided
-        if target_steam_id:
-            if not (
-                target_steam_id.isdigit()
-                and len(target_steam_id) == 17
-                and target_steam_id.startswith("7656")
+        # Priority 1: Check for Steam64ID parameter
+        if steam_id:
+            steam_id = steam_id.strip()
+            if (
+                steam_id.isdigit()
+                and len(steam_id) == 17
+                and steam_id.startswith("7656")
             ):
+                target_steam_id = steam_id
+            else:
                 return f"错误：提供的Steam ID格式不正确。Steam64ID应为17位数字且以7656开头。"
 
-        # If no steam_id provided, check user's binding
+        # Priority 2: Check for @mention target_user_id
+        if not target_steam_id and target_user_id:
+            target_user_id = target_user_id.strip()
+            target_steam_id = self.bindings.get(target_user_id)
+            if not target_steam_id:
+                return f"该用户尚未绑定Steam账号，无法查询其游戏库。"
+
+        # Priority 3: Check message @mentions (if no explicit target specified)
+        if not target_steam_id and not target_user_id:
+            for component in event.message_obj.message:
+                if isinstance(component, Comp.At):
+                    mentioned_id = str(component.qq)
+                    target_steam_id = self.bindings.get(mentioned_id)
+                    if target_steam_id:
+                        break
+
+        # Priority 4: Use sender's own binding
         if not target_steam_id:
             target_steam_id = self.bindings.get(user_id)
             if not target_steam_id:
@@ -903,30 +923,50 @@ class SteamGamePlugin(Star):
 
     @llm_tool(name="get_steam_activity")
     async def get_steam_activity(
-        self, event: AstrMessageEvent, steam_id: str = ""
+        self, event: AstrMessageEvent, steam_id: str = "", target_user_id: str = ""
     ) -> str:
         """获取用户的Steam最近动态和活动状态，包括在线状态、正在玩的游戏、最近游玩记录等。
-        当用户询问自己的Steam状态、最近在玩什么游戏、是否在线时调用此工具。
+        当用户询问自己的Steam状态、最近在玩什么游戏、是否在线，或查询@某人的状态时调用此工具。
 
         Args:
             steam_id(string): 可选。用户的Steam64ID（17位数字，以7656开头）。如果不提供，则使用当前用户的绑定。
+            target_user_id(string): 可选。目标用户的平台ID（如QQ号），用于查询@某人的状态。如果消息中有@某人，应该传入被@用户的ID。
 
         Returns:
             str: Steam活动状态的文本描述
         """
         user_id = str(event.get_sender_id())
-        target_steam_id = steam_id.strip() if steam_id else None
+        target_steam_id = None
 
-        # Validate Steam64ID format if provided
-        if target_steam_id:
-            if not (
-                target_steam_id.isdigit()
-                and len(target_steam_id) == 17
-                and target_steam_id.startswith("7656")
+        # Priority 1: Check for Steam64ID parameter
+        if steam_id:
+            steam_id = steam_id.strip()
+            if (
+                steam_id.isdigit()
+                and len(steam_id) == 17
+                and steam_id.startswith("7656")
             ):
+                target_steam_id = steam_id
+            else:
                 return f"错误：提供的Steam ID格式不正确。Steam64ID应为17位数字且以7656开头。"
 
-        # If no steam_id provided, check user's binding
+        # Priority 2: Check for explicit target_user_id parameter
+        if not target_steam_id and target_user_id:
+            target_user_id = target_user_id.strip()
+            target_steam_id = self.bindings.get(target_user_id)
+            if not target_steam_id:
+                return f"该用户尚未绑定Steam账号，无法查询其状态。"
+
+        # Priority 3: Check message @mentions (if no explicit target specified)
+        if not target_steam_id and not target_user_id:
+            for component in event.message_obj.message:
+                if isinstance(component, Comp.At):
+                    mentioned_id = str(component.qq)
+                    target_steam_id = self.bindings.get(mentioned_id)
+                    if target_steam_id:
+                        break
+
+        # Priority 4: Use sender's own binding
         if not target_steam_id:
             target_steam_id = self.bindings.get(user_id)
             if not target_steam_id:
