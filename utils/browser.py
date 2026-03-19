@@ -211,6 +211,30 @@ async def render_html_to_image(
         except Exception as e:
             logger.warning(f"[Playwright] 检查图片状态失败: {e}")
 
+        # Get the actual content height and resize viewport to fit all content
+        try:
+            content_height = await page.evaluate("""
+                () => {
+                    const container = document.querySelector('.container');
+                    const body = document.body;
+                    const scrollHeight = Math.max(
+                        container ? container.scrollHeight : 0,
+                        body ? body.scrollHeight : 0,
+                        document.documentElement.scrollHeight
+                    );
+                    return scrollHeight;
+                }
+            """)
+            if content_height and content_height > 0:
+                # Add some padding and resize viewport
+                new_height = content_height + 100
+                await page.set_viewport_size({"width": width, "height": new_height})
+                # Wait for layout to adjust
+                await page.wait_for_timeout(500)
+                logger.info(f"[Playwright] 调整视口高度为 {new_height}px")
+        except Exception as e:
+            logger.warning(f"[Playwright] 调整视口高度失败: {e}")
+
         content_selector = ".container"
         locator = page.locator(content_selector)
 
