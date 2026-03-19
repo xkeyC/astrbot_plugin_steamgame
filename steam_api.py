@@ -3,6 +3,7 @@ import time
 import asyncio
 from typing import Dict, List, Optional, Any
 
+
 class SteamAPI:
     BASE_URL = "http://api.steampowered.com"
 
@@ -25,21 +26,22 @@ class SteamAPI:
 
     async def _set_cache(self, key: str, value: Any):
         async with self._cache_lock:
-            self._cache[key] = {
-                "timestamp": time.time(),
-                "value": value
-            }
+            self._cache[key] = {"timestamp": time.time(), "value": value}
 
     async def _request(self, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
         params["key"] = self.api_key
         params["format"] = "json"
-        
+
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(f"{self.BASE_URL}/{endpoint}", params=params, proxy=self.proxy) as response:
+                async with session.get(
+                    f"{self.BASE_URL}/{endpoint}", params=params, proxy=self.proxy
+                ) as response:
                     if response.status != 200:
                         if self.logger:
-                            self.logger.error(f"Steam API 请求失败，状态码 {response.status}，内容：{await response.text()}")
+                            self.logger.error(
+                                f"Steam API 请求失败，状态码 {response.status}，内容：{await response.text()}"
+                            )
                         return {}
                     try:
                         return await response.json()
@@ -52,7 +54,9 @@ class SteamAPI:
                     self.logger.error(f"Steam API 请求异常：{e}")
                 return {}
 
-    async def get_player_summaries(self, steam_ids: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
+    async def get_player_summaries(
+        self, steam_ids: str, force_refresh: bool = False
+    ) -> Optional[Dict[str, Any]]:
         """
         Get player summaries for a list of Steam IDs (comma separated).
         force_refresh: If True, bypass cache to get fresh data.
@@ -67,7 +71,9 @@ class SteamAPI:
                     return [dict(player) for player in cached]
                 return cached
 
-        data = await self._request("ISteamUser/GetPlayerSummaries/v0002/", {"steamids": steam_ids})
+        data = await self._request(
+            "ISteamUser/GetPlayerSummaries/v0002/", {"steamids": steam_ids}
+        )
         if "response" in data and "players" in data["response"]:
             players = data["response"]["players"]
             if players:
@@ -93,10 +99,11 @@ class SteamAPI:
         params = {
             "steamid": steam_id,
             "include_appinfo": 1,
-            "include_played_free_games": 1
+            "include_played_free_games": 1,
+            "include_extended_info": 1,  # Include rtime_last_played
         }
         data = await self._request("IPlayerService/GetOwnedGames/v0001/", params)
-        
+
         if "response" in data and "games" in data["response"]:
             games = [dict(g) for g in data["response"]["games"]]
             # Sort by playtime_forever descending
@@ -114,11 +121,10 @@ class SteamAPI:
         if cached:
             return [dict(g) for g in cached]
 
-        params = {
-            "steamid": steam_id,
-            "count": 10
-        }
-        data = await self._request("IPlayerService/GetRecentlyPlayedGames/v0001/", params)
+        params = {"steamid": steam_id, "count": 10}
+        data = await self._request(
+            "IPlayerService/GetRecentlyPlayedGames/v0001/", params
+        )
 
         if "response" in data and "games" in data["response"]:
             games = [dict(g) for g in data["response"]["games"]]
@@ -126,17 +132,20 @@ class SteamAPI:
             return [dict(g) for g in games]
         return []
 
-    async def get_user_stats_for_game(self, steam_id: str, app_id: int) -> Optional[Dict[str, Any]]:
+    async def get_user_stats_for_game(
+        self, steam_id: str, app_id: int
+    ) -> Optional[Dict[str, Any]]:
         """
         Get user stats and achievements for a game.
         """
         cache_key = f"stats_{steam_id}_{app_id}"
         cached = await self._get_cache(cache_key)
-        if cached: return cached
+        if cached:
+            return cached
 
         params = {"steamid": steam_id, "appid": app_id}
         data = await self._request("ISteamUserStats/GetUserStatsForGame/v0002/", params)
-        
+
         if "playerstats" in data:
             await self._set_cache(cache_key, data["playerstats"])
             return data["playerstats"]
@@ -148,17 +157,20 @@ class SteamAPI:
         """
         cache_key = f"schema_{app_id}"
         cached = await self._get_cache(cache_key)
-        if cached: return cached
+        if cached:
+            return cached
 
         params = {"appid": app_id}
         data = await self._request("ISteamUserStats/GetSchemaForGame/v2/", params)
-        
+
         if "game" in data:
             await self._set_cache(cache_key, data["game"])
             return data["game"]
         return None
 
-    async def get_player_bans(self, steam_ids: str | List[str]) -> Optional[List[Dict[str, Any]]]:
+    async def get_player_bans(
+        self, steam_ids: str | List[str]
+    ) -> Optional[List[Dict[str, Any]]]:
         """
         获取 VAC / Game / Community Ban 信息
         """
@@ -191,7 +203,11 @@ class SteamAPI:
             {"steamid": steam_id, "relationship": "friend"},
         )
         if "friendslist" in data and "friends" in data["friendslist"]:
-            friends = [f.get("steamid") for f in data["friendslist"]["friends"] if f.get("steamid")]
+            friends = [
+                f.get("steamid")
+                for f in data["friendslist"]["friends"]
+                if f.get("steamid")
+            ]
             await self._set_cache(cache_key, friends)
             return list(friends)
         return []
@@ -199,10 +215,14 @@ class SteamAPI:
     async def _request_store_json(self, url: str) -> Dict[str, Any]:
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(url, proxy=self.proxy, headers={"Accept": "application/json"}) as response:
+                async with session.get(
+                    url, proxy=self.proxy, headers={"Accept": "application/json"}
+                ) as response:
                     if response.status != 200:
                         if self.logger:
-                            self.logger.error(f"Steam 商店接口请求失败，状态码 {response.status}")
+                            self.logger.error(
+                                f"Steam 商店接口请求失败，状态码 {response.status}"
+                            )
                         return {}
                     try:
                         return await response.json(content_type=None)
@@ -214,4 +234,3 @@ class SteamAPI:
                 if self.logger:
                     self.logger.error(f"Steam 商店接口请求异常：{e}")
                 return {}
-

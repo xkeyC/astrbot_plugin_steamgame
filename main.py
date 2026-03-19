@@ -819,6 +819,7 @@ class SteamGamePlugin(Star):
         steam_id: str = "",
         target_user_id: str = "",
         limit: int = 50,
+        sort_by: str = "playtime",
     ) -> str:
         """获取用户的Steam游戏库信息，包括游戏数量、总游戏时长、最近游玩的游戏等。
         当用户询问自己的游戏库、拥有哪些游戏、游戏时长统计，或查询@某人的游戏库时调用此工具。
@@ -827,10 +828,11 @@ class SteamGamePlugin(Star):
         Args:
             steam_id(string): 可选。用户的Steam64ID（17位数字，以7656开头）。如果不提供，则使用当前用户的绑定。
             target_user_id(string): 可选。目标用户的平台ID（如QQ号），用于查询@某人的游戏库。如果消息中有@某人，应该传入被@用户的ID。
-            limit(number): 可选。返回的游玩时长最多的游戏数量。默认为50，可根据需要调整。
+            limit(number): 可选。返回的游戏数量。默认为50，可根据需要调整。
+            sort_by(string): 可选。排序方式，可选值：playtime(游玩时长,默认)、recent(最近游玩)、name(游戏名称)、appid(游戏新旧)。默认为playtime。
 
         Returns:
-            str: 游戏库信息的文本描述，包含游戏数量、总时长、最近游玩游戏等
+            str: 游戏库信息的文本描述，包含游戏数量、总时长、游戏列表等
         """
         user_id = str(event.get_sender_id())
         target_steam_id = None
@@ -891,12 +893,35 @@ class SteamGamePlugin(Star):
         total_minutes = sum(g.get("playtime_forever", 0) for g in owned_games)
         total_hours = total_minutes / 60
 
-        # Sort by playtime for top games
-        sorted_games = sorted(
-            owned_games, key=lambda x: x.get("playtime_forever", 0), reverse=True
-        )
-        # Use provided limit, default to 10, cap at 100 to avoid too long responses
-        game_limit = max(1, min(limit, 100)) if limit else 10
+        # Sort games based on sort_by parameter
+        sort_by = sort_by.lower() if sort_by else "playtime"
+        if sort_by == "recent":
+            # Sort by last played time (rtime_last_played), most recent first
+            sorted_games = sorted(
+                owned_games,
+                key=lambda x: x.get("rtime_last_played", 0),
+                reverse=True,
+            )
+            sort_label = "最近游玩"
+        elif sort_by == "name":
+            # Sort by game name alphabetically
+            sorted_games = sorted(owned_games, key=lambda x: x.get("name", "").lower())
+            sort_label = "游戏名称"
+        elif sort_by == "appid":
+            # Sort by appid (approximate game release order, lower = older games)
+            sorted_games = sorted(owned_games, key=lambda x: x.get("appid", 0))
+            sort_label = "游戏新旧"
+        else:
+            # Default: sort by playtime
+            sorted_games = sorted(
+                owned_games,
+                key=lambda x: x.get("playtime_forever", 0),
+                reverse=True,
+            )
+            sort_label = "游玩时长"
+
+        # Use provided limit, default to 50, cap at 100 to avoid too long responses
+        game_limit = max(1, min(limit, 100)) if limit else 50
         top_games = sorted_games[:game_limit]
 
         # Get recently played games
@@ -910,7 +935,7 @@ class SteamGamePlugin(Star):
         )
 
         if top_games:
-            lines.append(f"\n📊 游玩时长最多的游戏（前{len(top_games)}款）：")
+            lines.append(f"\n📊 按{sort_label}排序（前{len(top_games)}款）：")
             for i, game in enumerate(top_games, 1):
                 name = game.get("name", "未知游戏")
                 hours = game.get("playtime_forever", 0) / 60
