@@ -336,17 +336,25 @@ class SteamGamePlugin(Star):
     def _get_default_icon_base64(self) -> str:
         """获取默认图标 base64 数据 URI（用于图片加载失败时显示）"""
         if self._default_icon_base64 is not None:
+            logger.info(f"[默认图标] 使用缓存，长度: {len(self._default_icon_base64)}")
             return self._default_icon_base64
 
         default_icon_path = self.assets_dir / "default_icon.png"
+        logger.info(f"[默认图标] 尝试读取: {default_icon_path}")
+
         if default_icon_path.exists():
             try:
                 with default_icon_path.open("rb") as f:
                     data = f.read()
                     self._default_icon_base64 = self._bytes_to_data_uri(data, "png")
+                    logger.info(
+                        f"[默认图标] 读取成功，base64 长度: {len(self._default_icon_base64)}"
+                    )
                     return self._default_icon_base64
             except Exception as e:
-                logger.warning(f"读取默认图标失败: {e}")
+                logger.error(f"[默认图标] 读取失败: {e}")
+        else:
+            logger.error(f"[默认图标] 文件不存在: {default_icon_path}")
 
         # 如果读取失败，返回空字符串
         self._default_icon_base64 = ""
@@ -366,6 +374,13 @@ class SteamGamePlugin(Star):
         except Exception as e:
             logger.error(f"Playwright 初始化失败: {e}")
             return False
+
+    async def terminate(self):
+        """插件卸载时清理资源，关闭 Playwright 浏览器"""
+        from .utils.browser import close_browser
+
+        await close_browser()
+        logger.info("SteamGame 插件已卸载，浏览器资源已清理")
 
     async def _render_html_local(
         self,
@@ -395,7 +410,9 @@ class SteamGamePlugin(Star):
         template = Template(template_content)
 
         # 注入默认图标到模板数据
-        template_data["default_icon"] = self._get_default_icon_base64()
+        default_icon = self._get_default_icon_base64()
+        template_data["default_icon"] = default_icon
+        logger.info(f"[模板渲染] 注入 default_icon，长度: {len(default_icon)}")
 
         html_content = template.render(**template_data)
 

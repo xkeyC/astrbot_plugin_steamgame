@@ -158,13 +158,21 @@
     </div>
     <script>
         const defaultIcon = "{{ default_icon|safe }}";
+        
+        function replaceBrokenImage(img) {
+            if (defaultIcon && defaultIcon.length > 20) {
+                img.src = defaultIcon;
+            }
+        }
+        
         document.querySelectorAll('img').forEach(img => {
             img.onerror = function() {
-                if (defaultIcon && defaultIcon.length > 0 && !this.src.includes('data:image')) {
-                    this.src = defaultIcon;
-                }
+                replaceBrokenImage(this);
                 this.onerror = null;
             };
+            if (img.complete && img.naturalHeight === 0) {
+                replaceBrokenImage(img);
+            }
         });
     </script>
 </body>

@@ -468,14 +468,29 @@
     <script>
         // 默认图片占位符
         const defaultIcon = "{{ default_icon|safe }}";
+        console.log('[Steam Plugin] defaultIcon loaded, length:', defaultIcon.length);
+        
+        function replaceBrokenImage(img) {
+            if (defaultIcon && defaultIcon.length > 20) {
+                console.log('[Steam Plugin] Replacing broken image:', img.src);
+                img.src = defaultIcon;
+            } else {
+                console.log('[Steam Plugin] No default icon available');
+            }
+        }
         
         document.querySelectorAll('img').forEach(img => {
+            // 设置 onerror 处理器
             img.onerror = function() {
-                if (defaultIcon && defaultIcon.length > 0 && !this.src.includes('data:image')) {
-                    this.src = defaultIcon;
-                }
+                replaceBrokenImage(this);
                 this.onerror = null;
             };
+            
+            // 检查已经加载失败的图片（complete 为 true 但 naturalHeight 为 0）
+            if (img.complete && img.naturalHeight === 0) {
+                console.log('[Steam Plugin] Found already broken image:', img.src);
+                replaceBrokenImage(img);
+            }
         });
     </script>
 </body>
