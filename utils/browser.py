@@ -87,9 +87,37 @@ async def create_page(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         )
 
-        await context.route("**/*", lambda route: route.continue_())
-
         page = await context.new_page()
+
+        async def handle_route(route):
+            request = route.request
+            url = request.url
+
+            steam_domains = [
+                "steamcdn-a.akamaihd.net",
+                "steamcommunity.com",
+                "steampowered.com",
+                "cloudflare.steamstatic.com",
+                "cdn.cloudflare.steamstatic.com",
+                "cdn.steamstatic.com",
+                "media.steampowered.com",
+            ]
+
+            is_steam_image = any(domain in url for domain in steam_domains) and (
+                ".jpg" in url or ".png" in url or ".gif" in url or "/images/" in url
+            )
+
+            if is_steam_image:
+                headers = {
+                    **request.headers,
+                    "Referer": "https://steamcommunity.com/",
+                    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                }
+                await route.continue_(headers=headers)
+            else:
+                await route.continue_()
+
+        await context.route("**/*", handle_route)
 
         await page.set_extra_http_headers(
             {
@@ -134,26 +162,48 @@ async def render_html_to_image(
         except Exception:
             pass
 
-        await page.wait_for_timeout(500)
+        await page.wait_for_timeout(1000)
 
         try:
+            img_count = await page.evaluate("""
+                () => {
+                    const images = document.querySelectorAll('img');
+                    let loaded = 0;
+                    let failed = 0;
+                    let pending = 0;
+                    
+                    images.forEach(img => {
+                        if (img.complete && img.naturalHeight > 0) {
+                            loaded++;
+                        } else if (img.complete) {
+                            failed++;
+                        } else {
+                            pending++;
+                        }
+                    });
+                    
+                    return { total: images.length, loaded, failed, pending };
+                }
+            """)
+            logger.info(f"[Playwright] 图片状态: {img_count}")
+
             await page.evaluate("""
                 () => {
                     const images = document.querySelectorAll('img');
                     return Promise.all(
                         Array.from(images).map(img => {
                             if (img.complete) return Promise.resolve();
-                            return new Promise((resolve, reject) => {
+                            return new Promise((resolve) => {
                                 img.onload = resolve;
                                 img.onerror = resolve;
-                                setTimeout(resolve, 3000);
+                                setTimeout(resolve, 5000);
                             });
                         })
                     );
                 }
             """)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[Playwright] 检查图片状态失败: {e}")
 
         content_selector = ".container"
         locator = page.locator(content_selector)

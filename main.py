@@ -214,7 +214,11 @@ class SteamGamePlugin(Star):
 
     async def _download_cover(self, url: str, dest_path: Path) -> Optional[bytes]:
         try:
-            async with aiohttp.ClientSession() as session:
+            headers = {
+                "Referer": "https://steamcommunity.com/",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            }
+            async with aiohttp.ClientSession(headers=headers) as session:
                 async with session.get(url, proxy=self.proxy) as resp:
                     if resp.status == 200:
                         data = await resp.read()
@@ -306,6 +310,25 @@ class SteamGamePlugin(Star):
                 avatar_url = avatar_url[:-4] + ".jpg"
         if avatar_url:
             summary["avatarfull"] = avatar_url
+        return avatar_url
+
+    async def _ensure_avatar_uri(self, summary: Dict[str, Any]) -> str:
+        """下载头像并转为 base64，避免防盗链问题"""
+        avatar_url = summary.get("avatarfull", "")
+        if not avatar_url:
+            return ""
+
+        avatar_hash = summary.get("avatarhash", "unknown")
+        dest_path = self.cover_dir / f"avatar_{avatar_hash}.jpg"
+
+        cached = self._load_cached_cover(dest_path)
+        if cached:
+            return cached
+
+        data = await self._download_cover(avatar_url, dest_path)
+        if data:
+            return self._bytes_to_data_uri(data, "jpeg")
+
         return avatar_url
 
     async def _init_playwright(self):
@@ -478,6 +501,9 @@ class SteamGamePlugin(Star):
             )
             return
         self._ensure_static_avatar(summary)
+        avatar_uri = await self._ensure_avatar_uri(summary)
+        if avatar_uri:
+            summary["avatarfull"] = avatar_uri
 
         is_private = summary.get("communityvisibilitystate", 1) != 3
 
