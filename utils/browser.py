@@ -165,27 +165,33 @@ async def render_html_to_image(
         await page.wait_for_timeout(1000)
 
         try:
-            img_count = await page.evaluate("""
+            img_status = await page.evaluate("""
                 () => {
                     const images = document.querySelectorAll('img');
                     let loaded = 0;
                     let failed = 0;
                     let pending = 0;
+                    const failedUrls = [];
                     
                     images.forEach(img => {
                         if (img.complete && img.naturalHeight > 0) {
                             loaded++;
                         } else if (img.complete) {
                             failed++;
+                            failedUrls.push(img.src);
                         } else {
                             pending++;
                         }
                     });
                     
-                    return { total: images.length, loaded, failed, pending };
+                    return { total: images.length, loaded, failed, pending, failedUrls };
                 }
             """)
-            logger.info(f"[Playwright] 图片状态: {img_count}")
+            logger.info(f"[Playwright] 图片状态: {img_status}")
+            if img_status.get("failedUrls"):
+                logger.warning(
+                    f"[Playwright] 加载失败的图片 URL: {img_status['failedUrls']}"
+                )
 
             await page.evaluate("""
                 () => {

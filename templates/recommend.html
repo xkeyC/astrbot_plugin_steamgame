@@ -156,6 +156,17 @@
 
     <div class="footnote">统计来自群友公开的游玩时长，仅供参考</div>
     </div>
+    <script>
+        const defaultIcon = '{{ default_icon }}';
+        document.querySelectorAll('img').forEach(img => {
+            img.onerror = function() {
+                if (defaultIcon && defaultIcon !== '') {
+                    this.src = defaultIcon;
+                }
+                this.onerror = null;
+            };
+        });
+    </script>
 </body>
 
 </html>

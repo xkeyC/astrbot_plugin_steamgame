@@ -53,6 +53,8 @@ class SteamGamePlugin(Star):
         self.data_file: Path = self.data_dir / "steam_binding.json"
         self.cover_dir: Path = self.data_dir / "covers"
         self.templates_dir: Path = plugin_dir / "templates"
+        self.assets_dir: Path = plugin_dir / "assets"
+        self._default_icon_base64: str | None = None
 
         # Playwright 环境管理器
         self.env_manager = EnvManager(str(self.data_dir))
@@ -331,6 +333,25 @@ class SteamGamePlugin(Star):
 
         return avatar_url
 
+    def _get_default_icon_base64(self) -> str:
+        """获取默认图标 base64 数据 URI（用于图片加载失败时显示）"""
+        if self._default_icon_base64 is not None:
+            return self._default_icon_base64
+
+        default_icon_path = self.assets_dir / "default_icon.png"
+        if default_icon_path.exists():
+            try:
+                with default_icon_path.open("rb") as f:
+                    data = f.read()
+                    self._default_icon_base64 = self._bytes_to_data_uri(data, "png")
+                    return self._default_icon_base64
+            except Exception as e:
+                logger.warning(f"读取默认图标失败: {e}")
+
+        # 如果读取失败，返回空字符串
+        self._default_icon_base64 = ""
+        return self._default_icon_base64
+
     async def _init_playwright(self):
         """初始化 Playwright 环境"""
         if self.env_manager.is_installed():
@@ -372,6 +393,10 @@ class SteamGamePlugin(Star):
                 raise RuntimeError("Playwright 初始化失败，无法渲染图片")
 
         template = Template(template_content)
+
+        # 注入默认图标到模板数据
+        template_data["default_icon"] = self._get_default_icon_base64()
+
         html_content = template.render(**template_data)
 
         screenshot_bytes = await render_html_to_image(

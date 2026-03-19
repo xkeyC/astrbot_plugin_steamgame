@@ -465,6 +465,19 @@
 
         {% endif %}
     </div>
+    <script>
+        // 默认图片占位符（灰色背景上的 Steam 图标）
+        const defaultIcon = '{{ default_icon }}';
+        
+        document.querySelectorAll('img').forEach(img => {
+            img.onerror = function() {
+                if (defaultIcon && defaultIcon !== '') {
+                    this.src = defaultIcon;
+                }
+                this.onerror = null;
+            };
+        });
+    </script>
 </body>
 
 </html>

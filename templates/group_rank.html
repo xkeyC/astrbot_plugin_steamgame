@@ -181,6 +181,17 @@
         </div>
     </div>
     </div>
+    <script>
+        const defaultIcon = '{{ default_icon }}';
+        document.querySelectorAll('img').forEach(img => {
+            img.onerror = function() {
+                if (defaultIcon && defaultIcon !== '') {
+                    this.src = defaultIcon;
+                }
+                this.onerror = null;
+            };
+        });
+    </script>
 </body>
 
 </html>
