@@ -448,42 +448,63 @@ class SteamGamePlugin(Star):
     ) -> str:
         """
         Resolve Steam ID from argument.
-        Target can be:
-        - Empty: Use sender's bound ID.
-        - @Mention: Use mentioned user's bound ID.
-        - Digits: Use as Steam ID directly.
+
+        Priority:
+        1. If target is a valid Steam64ID (17 digits starting with 7656): use directly
+        2. If message contains @mention: use mentioned user's binding
+        3. If allow_fallback: use sender's own binding
+
+        Args:
+            target: Can be empty or Steam64ID (7656...)
+            allow_fallback: Whether to fallback to sender's binding when no target specified
+
+        Returns:
+            Steam64ID string or None if not found
         """
-        # 1. Check if mentioned
         save_needed = False
         group_id = event.get_group_id()
         steam_id = None
 
-        for component in event.message_obj.message:
-            if isinstance(component, Comp.At):
-                target_user_id = str(component.qq)
-                steam_id = self.bindings.get(target_user_id)
-                if (
-                    steam_id
-                    and group_id
-                    and self._link_user_to_group(target_user_id, group_id)
-                ):
-                    save_needed = True
-                break
+        # 1. Check if target is a valid Steam64ID (17 digits, typically starts with 7656)
+        if target:
+            target = target.strip()
+            if target.isdigit() and len(target) == 17 and target.startswith("7656"):
+                steam_id = target
+                logger.debug(f"[SteamID解析] 识别为Steam64ID: {steam_id}")
 
-        # 2. Check if explicit ID (digits)
-        if (
-            not steam_id and target and target.isdigit() and len(target) > 10
-        ):  # Simple check for Steam ID format
-            steam_id = target
+        # 2. If no steam_id from target param, check message @mentions
+        if not steam_id:
+            for component in event.message_obj.message:
+                if isinstance(component, Comp.At):
+                    target_user_id = str(component.qq)
+                    steam_id = self.bindings.get(target_user_id)
+                    if steam_id:
+                        logger.debug(
+                            f"[SteamID解析] @提及 {target_user_id} -> {steam_id}"
+                        )
+                        if group_id and self._link_user_to_group(
+                            target_user_id, group_id
+                        ):
+                            save_needed = True
+                    else:
+                        logger.debug(
+                            f"[SteamID解析] @提及 {target_user_id} 未绑定SteamID"
+                        )
+                    break  # Only use first @mention
 
-        # 3. Default: Use sender's ID
+        # 3. Fallback to sender's own binding
         if not steam_id and allow_fallback:
             user_id = str(event.get_sender_id())
             steam_id = self.bindings.get(user_id)
-            if steam_id and group_id and self._link_user_to_group(user_id, group_id):
-                save_needed = True
+            if steam_id:
+                logger.debug(f"[SteamID解析] 使用发送者绑定: {steam_id}")
+                if group_id and self._link_user_to_group(user_id, group_id):
+                    save_needed = True
+
+        # Save group bindings if updated
         if save_needed:
             self._save_bindings()
+
         return steam_id
 
     @filter.command("绑定steam")
@@ -633,14 +654,26 @@ class SteamGamePlugin(Star):
 
     @filter.command("steam动态")
     async def steam_activity(self, event: AstrMessageEvent, target: str = ""):
-        """查看 Steam 动态 (头像 + 最近活动)"""
+        """查看 Steam 动态 (头像 + 最近活动)
+
+        用法:
+        /steam动态 - 查看自己的动态
+        /steam动态 @某人 - 查看@用户的动态
+        /steam动态 7656... - 查看指定Steam64ID的动态
+        """
         steam_id = await self._resolve_target(event, target)
         async for result in self._render_profile(event, steam_id, "summary"):
             yield result
 
     @filter.command("steam游戏库")
     async def steam_library(self, event: AstrMessageEvent, target: str = ""):
-        """查看 Steam 完整游戏库 (Mosaic 墙)"""
+        """查看 Steam 完整游戏库 (Mosaic 墙)
+
+        用法:
+        /steam游戏库 - 查看自己的游戏库
+        /steam游戏库 @某人 - 查看@用户的游戏库
+        /steam游戏库 7656... - 查看指定Steam64ID的游戏库
+        """
         steam_id = await self._resolve_target(event, target)
         async for result in self._render_profile(event, steam_id, "library"):
             yield result
@@ -777,8 +810,14 @@ class SteamGamePlugin(Star):
         yield event.image_result(img_url)
 
     @filter.command("steam对比")
-    async def steam_compare(self, event: AstrMessageEvent, target: str):
-        """对比两人游戏库 (/steam对比 @User)"""
+    async def steam_compare(self, event: AstrMessageEvent, target: str = ""):
+        """对比两人游戏库
+
+        用法:
+        /steam对比 - 与第一个@用户对比
+        /steam对比 @某人 - 与指定用户对比
+        /steam对比 7656... - 与指定Steam64ID对比
+        """
         # Fix: Directly get sender's ID from binding, don't use _resolve_target(event, "")
         # because it might pick up the @mention in the message intended for the target.
         sender_user_id = str(event.get_sender_id())
@@ -913,7 +952,13 @@ class SteamGamePlugin(Star):
 
     @filter.command("steam推荐")
     async def steam_recommend(self, event: AstrMessageEvent, target: str = ""):
-        """群友热门游戏推荐 (/steam推荐 [@用户])"""
+        """群友热门游戏推荐
+
+        用法:
+        /steam推荐 - 为自己生成推荐
+        /steam推荐 @某人 - 为@用户生成推荐
+        /steam推荐 7656... - 为指定Steam64ID生成推荐
+        """
         group_id = event.get_group_id()
         if not group_id:
             yield event.plain_result("请在群聊中使用该指令。")
@@ -1044,8 +1089,14 @@ class SteamGamePlugin(Star):
         yield event.image_result(img_url)
 
     @filter.command("steam联动")
-    async def steam_network(self, event: AstrMessageEvent):
-        """群内 Steam 好友联动与同玩提醒"""
+    async def steam_network(self, event: AstrMessageEvent, target: str = ""):
+        """群内 Steam 好友联动与同玩提醒
+
+        用法:
+        /steam联动 - 分析整个群的好友关系
+        /steam联动 @某人 - 分析特定用户的好友关系
+        /steam联动 7656... - 分析特定Steam64ID的好友关系
+        """
         group_id = event.get_group_id()
         if not group_id:
             yield event.plain_result("请在群聊中使用该指令。")
@@ -1056,13 +1107,37 @@ class SteamGamePlugin(Star):
             yield event.plain_result("本群暂无绑定信息。")
             return
 
+        # Resolve target if specified
+        target_steam_id = None
+        if target:
+            target_steam_id = await self._resolve_target(
+                event, target, allow_fallback=False
+            )
+            if not target_steam_id:
+                yield event.plain_result("未找到目标用户的 Steam 绑定。")
+                return
+
         steam_to_user = {
             steam: user for user, steam in group_binding_map.items() if steam
         }
         steam_ids = list(steam_to_user.keys())
-        if len(steam_ids) < 2:
-            yield event.plain_result("至少需要两位已绑定用户才能分析联动。")
-            return
+
+        # If target specified, filter to only analyze target's relationships with group
+        if target_steam_id:
+            # Check if target is in the group bindings
+            if target_steam_id not in steam_to_user:
+                yield event.plain_result("目标用户不在本群绑定列表中。")
+                return
+            # We'll analyze this specific user's friends within the group
+            analysis_scope = [target_steam_id]
+            target_name_prefix = ""
+        else:
+            # Analyze all group members
+            if len(steam_ids) < 2:
+                yield event.plain_result("至少需要两位已绑定用户才能分析联动。")
+                return
+            analysis_scope = steam_ids
+            target_name_prefix = ""
 
         summary_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -1075,11 +1150,11 @@ class SteamGamePlugin(Star):
 
         friend_tasks = {
             sid: asyncio.create_task(self.steam_api.get_friend_list(sid))
-            for sid in steam_ids
+            for sid in analysis_scope
         }
 
         playing_map: Dict[str, Dict[str, Any]] = {}
-        for sid in steam_ids:
+        for sid in analysis_scope:
             summary = await get_summary_cached(sid)
             game_id = summary.get("gameid")
             if summary.get("gameextrainfo") and game_id:
@@ -1102,7 +1177,12 @@ class SteamGamePlugin(Star):
             self._ensure_static_avatar(summary)
             return summary.get("personaname") or steam_id
 
-        lines = ["👥 群内 Steam 联动概览"]
+        # Customize title based on analysis scope
+        if target_steam_id:
+            target_name = display_name(target_steam_id)
+            lines = [f"👥 {target_name} 的 Steam 联动概览"]
+        else:
+            lines = ["👥 群内 Steam 联动概览"]
         if edges:
             lines.append(f"- 发现 {len(edges)} 对群友互为 Steam 好友：")
             for idx, (a, b) in enumerate(list(edges)[:10], start=1):
