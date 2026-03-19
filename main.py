@@ -814,14 +814,20 @@ class SteamGamePlugin(Star):
 
     @llm_tool(name="get_steam_library")
     async def get_steam_library(
-        self, event: AstrMessageEvent, steam_id: str = "", target_user_id: str = ""
+        self,
+        event: AstrMessageEvent,
+        steam_id: str = "",
+        target_user_id: str = "",
+        limit: int = 50,
     ) -> str:
         """获取用户的Steam游戏库信息，包括游戏数量、总游戏时长、最近游玩的游戏等。
         当用户询问自己的游戏库、拥有哪些游戏、游戏时长统计，或查询@某人的游戏库时调用此工具。
+        建议设置limit为50以获得较全面的游戏列表，但也可以根据用户问题调整数量。
 
         Args:
             steam_id(string): 可选。用户的Steam64ID（17位数字，以7656开头）。如果不提供，则使用当前用户的绑定。
             target_user_id(string): 可选。目标用户的平台ID（如QQ号），用于查询@某人的游戏库。如果消息中有@某人，应该传入被@用户的ID。
+            limit(number): 可选。返回的游玩时长最多的游戏数量。默认为50，可根据需要调整。
 
         Returns:
             str: 游戏库信息的文本描述，包含游戏数量、总时长、最近游玩游戏等
@@ -889,7 +895,9 @@ class SteamGamePlugin(Star):
         sorted_games = sorted(
             owned_games, key=lambda x: x.get("playtime_forever", 0), reverse=True
         )
-        top_games = sorted_games[:10]
+        # Use provided limit, default to 10, cap at 100 to avoid too long responses
+        game_limit = max(1, min(limit, 100)) if limit else 10
+        top_games = sorted_games[:game_limit]
 
         # Get recently played games
         recent_games = await self.steam_api.get_recently_played_games(target_steam_id)
@@ -902,7 +910,7 @@ class SteamGamePlugin(Star):
         )
 
         if top_games:
-            lines.append(f"\n📊 游玩时长最多的游戏（前10款）：")
+            lines.append(f"\n📊 游玩时长最多的游戏（前{len(top_games)}款）：")
             for i, game in enumerate(top_games, 1):
                 name = game.get("name", "未知游戏")
                 hours = game.get("playtime_forever", 0) / 60
@@ -923,14 +931,20 @@ class SteamGamePlugin(Star):
 
     @llm_tool(name="get_steam_activity")
     async def get_steam_activity(
-        self, event: AstrMessageEvent, steam_id: str = "", target_user_id: str = ""
+        self,
+        event: AstrMessageEvent,
+        steam_id: str = "",
+        target_user_id: str = "",
+        recent_games_limit: int = 10,
     ) -> str:
         """获取用户的Steam最近动态和活动状态，包括在线状态、正在玩的游戏、最近游玩记录等。
         当用户询问自己的Steam状态、最近在玩什么游戏、是否在线，或查询@某人的状态时调用此工具。
+        建议设置recent_games_limit为10以获取合理的最近游戏列表。
 
         Args:
             steam_id(string): 可选。用户的Steam64ID（17位数字，以7656开头）。如果不提供，则使用当前用户的绑定。
             target_user_id(string): 可选。目标用户的平台ID（如QQ号），用于查询@某人的状态。如果消息中有@某人，应该传入被@用户的ID。
+            recent_games_limit(number): 可选。返回的最近2周游玩游戏数量。默认为10，可根据需要调整。
 
         Returns:
             str: Steam活动状态的文本描述
@@ -1025,8 +1039,14 @@ class SteamGamePlugin(Star):
                 target_steam_id
             )
             if recent_games:
-                lines.append(f"\n🕐 最近2周游玩的游戏：")
-                for game in recent_games[:5]:
+                # Use provided limit, default to 10, cap at 20 to avoid too long responses
+                games_limit = (
+                    max(1, min(recent_games_limit, 20)) if recent_games_limit else 10
+                )
+                lines.append(
+                    f"\n🕐 最近2周游玩的游戏（前{min(len(recent_games), games_limit)}款）："
+                )
+                for game in recent_games[:games_limit]:
                     name = game.get("name", "未知游戏")
                     hours_2weeks = game.get("playtime_2weeks", 0) / 60
                     total_hours = game.get("playtime_forever", 0) / 60
