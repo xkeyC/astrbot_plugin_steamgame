@@ -46,10 +46,6 @@ class SteamGamePlugin(Star):
 
         self.steam_api = SteamAPI(self.api_key, self.proxy, logger=logger)
 
-        # Playwright 环境管理器
-        self.env_manager = EnvManager(str(self.data_dir))
-        self._playwright_ready = False
-
         # Data storage for bindings
         plugin_dir = Path(__file__).resolve().parent
         plugin_name = plugin_dir.name
@@ -57,6 +53,11 @@ class SteamGamePlugin(Star):
         self.data_file: Path = self.data_dir / "steam_binding.json"
         self.cover_dir: Path = self.data_dir / "covers"
         self.templates_dir: Path = plugin_dir / "templates"
+
+        # Playwright 环境管理器
+        self.env_manager = EnvManager(str(self.data_dir))
+        self._playwright_ready = False
+
         self.bindings, self.group_bindings = self._load_bindings()
         logger.info(
             f"SteamGamePlugin: 已载入 {len(self.bindings)} 个绑定，数据文件 {self.data_file}"
