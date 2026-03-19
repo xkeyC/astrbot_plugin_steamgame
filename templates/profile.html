@@ -466,12 +466,12 @@
         {% endif %}
     </div>
     <script>
-        // 默认图片占位符（灰色背景上的 Steam 图标）
-        const defaultIcon = '{{ default_icon }}';
+        // 默认图片占位符
+        const defaultIcon = "{{ default_icon|safe }}";
         
         document.querySelectorAll('img').forEach(img => {
             img.onerror = function() {
-                if (defaultIcon && defaultIcon !== '') {
+                if (defaultIcon && defaultIcon.length > 0 && !this.src.includes('data:image')) {
                     this.src = defaultIcon;
                 }
                 this.onerror = null;

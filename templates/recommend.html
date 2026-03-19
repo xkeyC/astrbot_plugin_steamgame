@@ -157,10 +157,10 @@
     <div class="footnote">统计来自群友公开的游玩时长，仅供参考</div>
     </div>
     <script>
-        const defaultIcon = '{{ default_icon }}';
+        const defaultIcon = "{{ default_icon|safe }}";
         document.querySelectorAll('img').forEach(img => {
             img.onerror = function() {
-                if (defaultIcon && defaultIcon !== '') {
+                if (defaultIcon && defaultIcon.length > 0 && !this.src.includes('data:image')) {
                     this.src = defaultIcon;
                 }
                 this.onerror = null;
