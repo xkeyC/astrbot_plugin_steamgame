@@ -34,6 +34,8 @@ async def get_browser() -> Browser | None:
             "--no-first-run",
             "--disable-extensions",
             "--disable-default-apps",
+            "--disable-web-security",
+            "--disable-features=IsolateOrigins,site-per-process",
         ]
 
         _browser_instance = await _playwright_instance.chromium.launch(
@@ -67,7 +69,7 @@ async def close_browser():
 
 async def create_page(
     width: int = 1400,
-    height: int = 10000,
+    height: int = 1000,
     scale_factor: int = 2,
     is_mobile: bool = False,
 ) -> Page | None:
@@ -81,8 +83,21 @@ async def create_page(
             device_scale_factor=scale_factor,
             is_mobile=is_mobile,
             has_touch=is_mobile,
+            bypass_csp=True,
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         )
+
+        await context.route("**/*", lambda route: route.continue_())
+
         page = await context.new_page()
+
+        await page.set_extra_http_headers(
+            {
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            }
+        )
+
         return page
     except Exception as e:
         logger.error(f"创建页面失败: {e}")
@@ -102,7 +117,7 @@ async def render_html_to_image(
 ) -> bytes | None:
     page = await create_page(
         width=width,
-        height=10000,
+        height=1000,
         scale_factor=scale_factor,
         is_mobile=is_mobile,
     )
@@ -110,9 +125,39 @@ async def render_html_to_image(
         return None
 
     try:
-        await page.set_content(html_content, wait_until="networkidle", timeout=timeout)
+        await page.set_content(
+            html_content, wait_until="domcontentloaded", timeout=timeout
+        )
 
-        locator = page.locator(selector)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=min(timeout, 10000))
+        except Exception:
+            pass
+
+        await page.wait_for_timeout(500)
+
+        try:
+            await page.evaluate("""
+                () => {
+                    const images = document.querySelectorAll('img');
+                    return Promise.all(
+                        Array.from(images).map(img => {
+                            if (img.complete) return Promise.resolve();
+                            return new Promise((resolve, reject) => {
+                                img.onload = resolve;
+                                img.onerror = resolve;
+                                setTimeout(resolve, 3000);
+                            });
+                        })
+                    );
+                }
+            """)
+        except Exception:
+            pass
+
+        content_selector = ".container"
+        locator = page.locator(content_selector)
+
         if await locator.count() > 0:
             screenshot_bytes = await locator.screenshot(
                 type=image_type,
@@ -121,10 +166,11 @@ async def render_html_to_image(
                 animations="disabled",
             )
         else:
-            screenshot_bytes = await page.screenshot(
-                full_page=full_page,
+            body_locator = page.locator("body")
+            screenshot_bytes = await body_locator.screenshot(
                 type=image_type,
                 quality=quality if image_type == "jpeg" else None,
+                omit_background=False,
                 animations="disabled",
             )
 
