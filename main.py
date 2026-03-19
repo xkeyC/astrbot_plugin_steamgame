@@ -590,16 +590,16 @@ class SteamGamePlugin(Star):
         yield event.image_result(img_url)
 
     @filter.command("steam动态")
-    async def steam_activity(self, event: AstrMessageEvent, arg: str = ""):
+    async def steam_activity(self, event: AstrMessageEvent, target: str = ""):
         """查看 Steam 动态 (头像 + 最近活动)"""
-        steam_id = await self._resolve_target(event, arg)
+        steam_id = await self._resolve_target(event, target)
         async for result in self._render_profile(event, steam_id, "summary"):
             yield result
 
     @filter.command("steam游戏库")
-    async def steam_library(self, event: AstrMessageEvent, arg: str = ""):
+    async def steam_library(self, event: AstrMessageEvent, target: str = ""):
         """查看 Steam 完整游戏库 (Mosaic 墙)"""
-        steam_id = await self._resolve_target(event, arg)
+        steam_id = await self._resolve_target(event, target)
         async for result in self._render_profile(event, steam_id, "library"):
             yield result
 
@@ -870,7 +870,7 @@ class SteamGamePlugin(Star):
         yield event.image_result(img_url)
 
     @filter.command("steam推荐")
-    async def steam_recommend(self, event: AstrMessageEvent, arg: str = ""):
+    async def steam_recommend(self, event: AstrMessageEvent, target: str = ""):
         """群友热门游戏推荐 (/steam推荐 [@用户])"""
         group_id = event.get_group_id()
         if not group_id:
@@ -882,7 +882,7 @@ class SteamGamePlugin(Star):
             yield event.plain_result("本群暂无绑定信息，无法生成推荐。")
             return
 
-        target_steam_id = await self._resolve_target(event, arg)
+        target_steam_id = await self._resolve_target(event, target)
         if not target_steam_id:
             yield event.plain_result("未找到目标用户的 Steam 绑定。")
             return
