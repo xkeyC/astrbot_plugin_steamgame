@@ -2,6 +2,8 @@ import base64
 import json
 import difflib
 import asyncio
+import os
+import tempfile
 from pathlib import Path
 from typing import Optional, Tuple, Dict, List, Any
 import aiohttp
@@ -10,8 +12,18 @@ from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api import logger
 from astrbot.api import message_components as Comp
 from .steam_api import SteamAPI
+from .utils.browser import render_html_to_image
+from .utils.env_manager import EnvManager
+from jinja2 import Template
 
-@register("steam_game", "bvzrays", "Steam Player Data Visualization", "1.6.0", "https://github.com/bvzrays/astrbot_plugin_steamgame")
+
+@register(
+    "steam_game",
+    "bvzrays",
+    "Steam Player Data Visualization",
+    "1.6.0",
+    "https://github.com/bvzrays/astrbot_plugin_steamgame",
+)
 class SteamGamePlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -20,14 +32,24 @@ class SteamGamePlugin(Star):
         self.proxy = self.config.get("proxy", "")
         self.image_quality = int(self.config.get("image_quality", 90))
         self.image_quality = max(10, min(100, self.image_quality))
-        self.recommend_source_limit = max(10, int(self.config.get("recommend_source_limit", 40)))
-        self.recommend_result_limit = max(3, int(self.config.get("recommend_result_limit", 6)))
-        
+        self.recommend_source_limit = max(
+            10, int(self.config.get("recommend_source_limit", 40))
+        )
+        self.recommend_result_limit = max(
+            3, int(self.config.get("recommend_result_limit", 6))
+        )
+
         if not self.api_key:
-            logger.warning("Steam API Key not set in config! Plugin will not work correctly.")
-            
+            logger.warning(
+                "Steam API Key not set in config! Plugin will not work correctly."
+            )
+
         self.steam_api = SteamAPI(self.api_key, self.proxy, logger=logger)
-        
+
+        # Playwright 环境管理器
+        self.env_manager = EnvManager(str(self.data_dir))
+        self._playwright_ready = False
+
         # Data storage for bindings
         plugin_dir = Path(__file__).resolve().parent
         plugin_name = plugin_dir.name
@@ -36,7 +58,9 @@ class SteamGamePlugin(Star):
         self.cover_dir: Path = self.data_dir / "covers"
         self.templates_dir: Path = plugin_dir / "templates"
         self.bindings, self.group_bindings = self._load_bindings()
-        logger.info(f"SteamGamePlugin: 已载入 {len(self.bindings)} 个绑定，数据文件 {self.data_file}")
+        logger.info(
+            f"SteamGamePlugin: 已载入 {len(self.bindings)} 个绑定，数据文件 {self.data_file}"
+        )
 
     def _load_bindings(self):
         if self.data_file.exists():
@@ -101,7 +125,9 @@ class SteamGamePlugin(Star):
         days = hours / 24
         return f"{int(hours)}h ({days:.1f}d)"
 
-    async def _aggregate_achievements(self, steam_id: str, games: list, limit: int = 12) -> dict:
+    async def _aggregate_achievements(
+        self, steam_id: str, games: list, limit: int = 12
+    ) -> dict:
         """Estimate achievement progress by sampling top games."""
         unlocked = 0
         total = 0
@@ -119,11 +145,17 @@ class SteamGamePlugin(Star):
             schema = await self.steam_api.get_schema_for_game(app_id)
             if not schema:
                 continue
-            achievements_schema = schema.get("availableGameStats", {}).get("achievements", [])
+            achievements_schema = schema.get("availableGameStats", {}).get(
+                "achievements", []
+            )
             total += len(achievements_schema)
 
             user_achievements = stats.get("achievements", [])
-            unlocked += sum(1 for ach in user_achievements if ach.get("achieved", 0) == 1 or ach.get("unlocktime"))
+            unlocked += sum(
+                1
+                for ach in user_achievements
+                if ach.get("achieved", 0) == 1 or ach.get("unlocktime")
+            )
 
         return {"unlocked": unlocked, "total": total}
 
@@ -151,8 +183,16 @@ class SteamGamePlugin(Star):
 
         return {
             "label": label,
-            "left": {"value": left_display, "result": left_result, "badge": badge_map[left_result]},
-            "right": {"value": right_display, "result": right_result, "badge": badge_map[right_result]},
+            "left": {
+                "value": left_display,
+                "result": left_result,
+                "badge": badge_map[left_result],
+            },
+            "right": {
+                "value": right_display,
+                "result": right_result,
+                "badge": badge_map[right_result],
+            },
         }
 
     def _bytes_to_data_uri(self, data: bytes, mime: str = "jpeg") -> str:
@@ -195,13 +235,13 @@ class SteamGamePlugin(Star):
             url_candidates = [
                 f"{base}/library_hero.jpg",
                 f"{base}/library_hero.png",
-                f"{base}/header.jpg"
+                f"{base}/header.jpg",
             ]
         else:
             url_candidates = [
                 f"{base}/library_600x900.jpg",
                 f"{base}/library_600x900.png",
-                f"{base}/header.jpg"
+                f"{base}/header.jpg",
             ]
 
         for url in url_candidates:
@@ -238,13 +278,19 @@ class SteamGamePlugin(Star):
                 continue
             games[idx]["cover_uri"] = cover
 
-    def _ensure_static_avatar(self, summary: Optional[Dict[str, Any]], size: str = "full") -> str:
+    def _ensure_static_avatar(
+        self, summary: Optional[Dict[str, Any]], size: str = "full"
+    ) -> str:
         """
         Steam 会在用户设置动态头像时返回 gif，这里将其转换为 jpg，避免 HTML 渲染时出现动图。
         """
         if not summary:
             return ""
-        avatar_url = summary.get("avatarfull", "") if size == "full" else summary.get("avatarmedium", "")
+        avatar_url = (
+            summary.get("avatarfull", "")
+            if size == "full"
+            else summary.get("avatarmedium", "")
+        )
         avatar_hash = summary.get("avatarhash")
         if avatar_url and avatar_url.endswith(".gif"):
             if avatar_hash:
@@ -261,7 +307,79 @@ class SteamGamePlugin(Star):
             summary["avatarfull"] = avatar_url
         return avatar_url
 
-    async def _resolve_target(self, event: AstrMessageEvent, arg: str, allow_fallback: bool = True) -> str:
+    async def _init_playwright(self):
+        """初始化 Playwright 环境"""
+        if self.env_manager.is_installed():
+            self._playwright_ready = True
+            logger.info("[Playwright] 已安装，跳过初始化")
+            return True
+
+        try:
+            await self.env_manager.install_dependencies()
+            self._playwright_ready = self.env_manager.is_installed()
+            return self._playwright_ready
+        except Exception as e:
+            logger.error(f"Playwright 初始化失败: {e}")
+            return False
+
+    async def _render_html_local(
+        self,
+        template_content: str,
+        template_data: dict,
+        width: int = 880,
+        image_type: str = "jpeg",
+        quality: int = 90,
+        timeout: int = 30000,
+    ) -> str:
+        """
+        使用本地 Playwright 渲染 HTML 模板
+
+        :param template_content: Jinja2 HTML 模板内容
+        :param template_data: 模板数据
+        :param width: 渲染宽度
+        :param image_type: 图片类型 (jpeg/png)
+        :param quality: JPEG 质量 (1-100)
+        :param timeout: 渲染超时时间 (ms)
+        :return: 图片文件路径
+        """
+        if not self._playwright_ready:
+            logger.info("[Playwright] 首次使用，初始化 Playwright...")
+            if not await self._init_playwright():
+                raise RuntimeError("Playwright 初始化失败，无法渲染图片")
+
+        template = Template(template_content)
+        html_content = template.render(**template_data)
+
+        screenshot_bytes = await render_html_to_image(
+            html_content=html_content,
+            selector="body",
+            width=width,
+            scale_factor=2,
+            is_mobile=False,
+            full_page=True,
+            timeout=timeout,
+            image_type=image_type,
+            quality=quality,
+        )
+
+        if not screenshot_bytes:
+            raise RuntimeError("Playwright 渲染失败")
+
+        temp_dir = tempfile.gettempdir()
+        import time
+
+        filename = f"steam_{int(time.time() * 1000)}.{image_type}"
+        filepath = os.path.join(temp_dir, filename)
+
+        with open(filepath, "wb") as f:
+            f.write(screenshot_bytes)
+
+        logger.info(f"图片已渲染: {filepath} ({len(screenshot_bytes)} bytes)")
+        return filepath
+
+    async def _resolve_target(
+        self, event: AstrMessageEvent, arg: str, allow_fallback: bool = True
+    ) -> str:
         """
         Resolve Steam ID from argument.
         Arg can be:
@@ -278,14 +396,20 @@ class SteamGamePlugin(Star):
             if isinstance(component, Comp.At):
                 target_user_id = str(component.qq)
                 steam_id = self.bindings.get(target_user_id)
-                if steam_id and group_id and self._link_user_to_group(target_user_id, group_id):
+                if (
+                    steam_id
+                    and group_id
+                    and self._link_user_to_group(target_user_id, group_id)
+                ):
                     save_needed = True
                 break
-        
+
         # 2. Check if explicit ID (digits)
-        if not steam_id and arg and arg.isdigit() and len(arg) > 10: # Simple check for Steam ID format
+        if (
+            not steam_id and arg and arg.isdigit() and len(arg) > 10
+        ):  # Simple check for Steam ID format
             steam_id = arg
-            
+
         # 3. Default: Use sender's ID
         if not steam_id and allow_fallback:
             user_id = str(event.get_sender_id())
@@ -298,7 +422,7 @@ class SteamGamePlugin(Star):
 
     @filter.command("绑定steam", prefix_optional=True)
     async def bind(self, event: AstrMessageEvent, steam_id: str = ""):
-        '''绑定 Steam ID（在新的群聊中可不填参数同步已有绑定）'''
+        """绑定 Steam ID（在新的群聊中可不填参数同步已有绑定）"""
         user_id = str(event.get_sender_id())
         group_id = event.get_group_id()
         message = ""
@@ -308,14 +432,18 @@ class SteamGamePlugin(Star):
         if steam_id:
             # Validate Steam ID (must be 64-bit integer, usually 17 digits)
             if not steam_id.isdigit() or len(steam_id) != 17:
-                yield event.plain_result("绑定失败：请输入正确的 17 位 Steam ID 64 (例如 76561198000000000)。")
+                yield event.plain_result(
+                    "绑定失败：请输入正确的 17 位 Steam ID 64 (例如 76561198000000000)。"
+                )
                 return
             self.bindings[user_id] = steam_id
             data_changed = True
             message = f"绑定成功！已关联 Steam ID: {steam_id}"
         else:
             if user_id not in self.bindings:
-                yield event.plain_result("你还没有绑定 Steam ID，请使用 /绑定steam <SteamID64>。")
+                yield event.plain_result(
+                    "你还没有绑定 Steam ID，请使用 /绑定steam <SteamID64>。"
+                )
                 return
             steam_id = self.bindings[user_id]
             message = "已将现有绑定同步至当前群聊。"
@@ -334,18 +462,24 @@ class SteamGamePlugin(Star):
             return
 
         if not steam_id:
-            yield event.plain_result("未找到绑定的 Steam ID。请先绑定 (/绑定steam <id>) 或指定 ID。")
+            yield event.plain_result(
+                "未找到绑定的 Steam ID。请先绑定 (/绑定steam <id>) 或指定 ID。"
+            )
             return
 
         # Fetch Data (force refresh for summary mode to get current playing status)
-        summary = await self.steam_api.get_player_summaries(steam_id, force_refresh=(mode == "summary"))
+        summary = await self.steam_api.get_player_summaries(
+            steam_id, force_refresh=(mode == "summary")
+        )
         if not summary:
-            yield event.plain_result("未找到该 Steam 用户，请检查 ID 是否正确，或检查网络/代理设置。")
+            yield event.plain_result(
+                "未找到该 Steam 用户，请检查 ID 是否正确，或检查网络/代理设置。"
+            )
             return
         self._ensure_static_avatar(summary)
 
         is_private = summary.get("communityvisibilitystate", 1) != 3
-        
+
         owned_games = []
         recent_games = []
         hero_cover = summary.get("avatarfull", "")
@@ -357,33 +491,43 @@ class SteamGamePlugin(Star):
             await self._decorate_games_with_cover(owned_games, "poster")
             await self._decorate_games_with_cover(recent_games, "poster")
             if owned_games:
-                hero_cover = await self._ensure_cover_uri(owned_games[0]["appid"], "hero")
+                hero_cover = await self._ensure_cover_uri(
+                    owned_games[0]["appid"], "hero"
+                )
                 if not hero_cover:
                     hero_cover = summary.get("avatarfull", "")
 
         # Process Data
         for game in owned_games:
-            game["playtime_forever_formatted"] = self._format_playtime(game.get("playtime_forever", 0))
-        
+            game["playtime_forever_formatted"] = self._format_playtime(
+                game.get("playtime_forever", 0)
+            )
+
         for game in recent_games:
-            game["playtime_2weeks_formatted"] = self._format_playtime(game.get("playtime_2weeks", 0))
+            game["playtime_2weeks_formatted"] = self._format_playtime(
+                game.get("playtime_2weeks", 0)
+            )
 
         # Mosaic Layout Logic (Only for Library mode)
         mosaic_games = []
         if mode == "library" and owned_games:
-            mosaic_games = owned_games[:100] # Take top 100
+            mosaic_games = owned_games[:100]  # Take top 100
             for i, game in enumerate(mosaic_games):
-                if i == 0: game["grid_class"] = "span-4x4"
-                elif i < 5: game["grid_class"] = "span-2x2"
-                elif i < 15: game["grid_class"] = "span-2x1" if i % 2 == 0 else "span-1x2"
-                else: game["grid_class"] = "span-1x1"
+                if i == 0:
+                    game["grid_class"] = "span-4x4"
+                elif i < 5:
+                    game["grid_class"] = "span-2x2"
+                elif i < 15:
+                    game["grid_class"] = "span-2x1" if i % 2 == 0 else "span-1x2"
+                else:
+                    game["grid_class"] = "span-1x1"
 
         # Check if playing
         playing_game = None
         if summary.get("gameextrainfo"):
             playing_game = {
                 "name": summary.get("gameextrainfo"),
-                "appid": summary.get("gameid")
+                "appid": summary.get("gameid"),
             }
             cover_uri = await self._ensure_cover_uri(summary.get("gameid"), "hero")
             playing_game["cover_uri"] = cover_uri or hero_cover
@@ -392,84 +536,82 @@ class SteamGamePlugin(Star):
         template_path = self.templates_dir / "profile.html"
         with template_path.open("r", encoding="utf-8") as f:
             template_content = f.read()
-            
+
         bans_data = await self.steam_api.get_player_bans(steam_id)
         ban_info = bans_data[0] if bans_data else None
 
-        img_url = await self.html_render(
-            template_content, {
+        img_url = await self._render_html_local(
+            template_content,
+            {
                 "player": summary,
                 "owned_games": mosaic_games if mode == "library" else owned_games,
                 "recent_games": recent_games,
                 "total_games": len(owned_games),
-                "total_playtime": self._format_playtime(sum(g.get("playtime_forever", 0) for g in owned_games)),
+                "total_playtime": self._format_playtime(
+                    sum(g.get("playtime_forever", 0) for g in owned_games)
+                ),
                 "is_private": is_private,
                 "mode": mode,
                 "playing_game": playing_game,
                 "hero_cover": hero_cover,
-                "ban_info": ban_info
+                "ban_info": ban_info,
             },
-            options={
-                "width": 880,
-                "full_page": True,
-                "omit_background": True,
-                "type": "jpeg",
-                "quality": self.image_quality
-            }
+            width=880,
+            image_type="jpeg",
+            quality=self.image_quality,
         )
         yield event.image_result(img_url)
 
     @filter.command("steam动态", prefix_optional=True)
     async def steam_activity(self, event: AstrMessageEvent, arg: str = ""):
-        '''查看 Steam 动态 (头像 + 最近活动)'''
+        """查看 Steam 动态 (头像 + 最近活动)"""
         steam_id = await self._resolve_target(event, arg)
         async for result in self._render_profile(event, steam_id, "summary"):
             yield result
 
-
-
     @filter.command("steam游戏库", prefix_optional=True)
     async def steam_library(self, event: AstrMessageEvent, arg: str = ""):
-        '''查看 Steam 完整游戏库 (Mosaic 墙)'''
+        """查看 Steam 完整游戏库 (Mosaic 墙)"""
         steam_id = await self._resolve_target(event, arg)
         async for result in self._render_profile(event, steam_id, "library"):
             yield result
 
-
     @filter.command("steam成就", prefix_optional=True)
     async def steam_achievement(self, event: AstrMessageEvent, game_name: str):
-        '''查看 Steam 游戏成就 (/steam成就 <游戏名>)'''
+        """查看 Steam 游戏成就 (/steam成就 <游戏名>)"""
         if not game_name:
             yield event.plain_result("请输入游戏名称，例如：/steam成就 黑神话")
             return
 
-        steam_id = await self._resolve_target(event, "") # Always check sender's achievements
+        steam_id = await self._resolve_target(
+            event, ""
+        )  # Always check sender's achievements
         if not steam_id:
             yield event.plain_result("请先绑定 Steam ID。")
             return
 
         # 1. Search for game in owned games
         owned_games = await self.steam_api.get_owned_games(steam_id)
-        
+
         # Fuzzy Search Logic
         game_names = [g["name"] for g in owned_games]
         matches = difflib.get_close_matches(game_name, game_names, n=5, cutoff=0.4)
-        
+
         target_game = None
-        
+
         # Exact match check (case-insensitive)
         for game in owned_games:
             if game_name.lower() == game["name"].lower():
                 target_game = game
                 break
-        
+
         if not target_game:
             # Substring match check
             for game in owned_games:
                 if game_name.lower() in game["name"].lower():
                     target_game = game
                     break
-        
+
         if not target_game:
             if matches:
                 # If multiple matches found, ask user to be specific
@@ -477,33 +619,43 @@ class SteamGamePlugin(Star):
                 # Let's just list them.
                 msg = "未找到精确匹配的游戏，你是不是想找：\n"
                 for i, m in enumerate(matches):
-                    msg += f"{i+1}. {m}\n"
+                    msg += f"{i + 1}. {m}\n"
                 msg += "请尝试使用更完整的名称。"
                 yield event.plain_result(msg)
                 return
             else:
-                yield event.plain_result(f"在你拥有的游戏中未找到包含“{game_name}”的游戏。")
+                yield event.plain_result(
+                    f"在你拥有的游戏中未找到包含“{game_name}”的游戏。"
+                )
                 return
 
         app_id = target_game["appid"]
-        
+
         # 2. Fetch Schema & Stats
         schema = await self.steam_api.get_schema_for_game(app_id)
-        achievements_all = schema.get("availableGameStats", {}).get("achievements", []) if schema else []
+        achievements_all = (
+            schema.get("availableGameStats", {}).get("achievements", [])
+            if schema
+            else []
+        )
         if not achievements_all:
-            yield event.plain_result(f"《{target_game['name']}》似乎没有可查询的 Steam 成就。")
+            yield event.plain_result(
+                f"《{target_game['name']}》似乎没有可查询的 Steam 成就。"
+            )
             return
 
         stats = await self.steam_api.get_user_stats_for_game(steam_id, app_id)
         user_achievements = stats.get("achievements", []) if stats else []
         user_achievements_map = {a["name"]: a for a in user_achievements}
-        
+
         unlocked_count = sum(
-            1 for a in user_achievements_map.values() if a.get("achieved", 0) == 1 or a.get("unlocktime")
+            1
+            for a in user_achievements_map.values()
+            if a.get("achieved", 0) == 1 or a.get("unlocktime")
         )
         total_count = len(achievements_all)
         completion_rate = (unlocked_count / total_count * 100) if total_count > 0 else 0
-        
+
         unlocked_display = []
         locked_display = []
         for ach in achievements_all:
@@ -514,7 +666,9 @@ class SteamGamePlugin(Star):
             }
             if ach.get("name") in user_achievements_map:
                 info = dict(base_info)
-                info["unlocktime"] = user_achievements_map[ach["name"]].get("unlocktime", 0)
+                info["unlocktime"] = user_achievements_map[ach["name"]].get(
+                    "unlocktime", 0
+                )
                 unlocked_display.append(info)
             else:
                 locked_display.append(base_info)
@@ -533,48 +687,44 @@ class SteamGamePlugin(Star):
             "rate": f"{completion_rate:.1f}",
             "achievements": display_achievements,
             "player_name": event.get_sender_name(),
-            "game_cover": cover_uri
+            "game_cover": cover_uri,
         }
-        
+
         template_path = self.templates_dir / "achievement.html"
         if not template_path.exists():
-             yield event.plain_result("成就模板尚未上传。")
-             return
+            yield event.plain_result("成就模板尚未上传。")
+            return
 
         with template_path.open("r", encoding="utf-8") as f:
             template_content = f.read()
-            
-        img_url = await self.html_render(
+
+        img_url = await self._render_html_local(
             template_content,
             render_data,
-            options={
-                "width": 700,
-                "full_page": True,
-                "omit_background": True,
-                "type": "jpeg",
-                "quality": self.image_quality
-            }
+            width=700,
+            image_type="jpeg",
+            quality=self.image_quality,
         )
         yield event.image_result(img_url)
 
     @filter.command("steam对比", prefix_optional=True)
     async def steam_compare(self, event: AstrMessageEvent, target: str):
-        '''对比两人游戏库 (/steam对比 @User)'''
-        # Fix: Directly get sender's ID from binding, don't use _resolve_target(event, "") 
+        """对比两人游戏库 (/steam对比 @User)"""
+        # Fix: Directly get sender's ID from binding, don't use _resolve_target(event, "")
         # because it might pick up the @mention in the message intended for the target.
         sender_user_id = str(event.get_sender_id())
         my_id = self.bindings.get(sender_user_id)
-        
+
         target_id = await self._resolve_target(event, target, allow_fallback=False)
-        
+
         if not my_id:
             yield event.plain_result("你还没有绑定 Steam ID 哦。")
             return
-            
+
         if not target_id:
             yield event.plain_result("目标用户未绑定 Steam ID，或未指定对比对象。")
             return
-            
+
         if my_id == target_id:
             yield event.plain_result("不能和自己对比哦。")
             return
@@ -582,11 +732,13 @@ class SteamGamePlugin(Star):
         # Fetch both
         my_games = await self.steam_api.get_owned_games(my_id)
         target_games = await self.steam_api.get_owned_games(target_id)
-        
+
         if not my_games or not target_games:
-            yield event.plain_result("无法获取双方的游戏库，请检查 Steam API Key 或网络代理。")
+            yield event.plain_result(
+                "无法获取双方的游戏库，请检查 Steam API Key 或网络代理。"
+            )
             return
-        
+
         my_summary = await self.steam_api.get_player_summaries(my_id) or {}
         target_summary = await self.steam_api.get_player_summaries(target_id) or {}
         self._ensure_static_avatar(my_summary)
@@ -596,16 +748,17 @@ class SteamGamePlugin(Star):
         my_game_ids = {g["appid"] for g in my_games}
         target_game_ids = {g["appid"] for g in target_games}
         common_ids = my_game_ids.intersection(target_game_ids)
-        
+
         common_games = []
         for gid in common_ids:
             # Find game info
             g = next((x for x in my_games if x["appid"] == gid), None)
-            if g: common_games.append(g)
-            
+            if g:
+                common_games.append(g)
+
         # Sort by my playtime
         common_games.sort(key=lambda x: x.get("playtime_forever", 0), reverse=True)
-        
+
         # Calculate unique games
         only_me_ids = my_game_ids - target_game_ids
         only_target_ids = target_game_ids - my_game_ids
@@ -622,8 +775,12 @@ class SteamGamePlugin(Star):
 
         # Achievement aggregation (sample top games to avoid heavy requests)
         my_ach_task = asyncio.create_task(self._aggregate_achievements(my_id, my_games))
-        target_ach_task = asyncio.create_task(self._aggregate_achievements(target_id, target_games))
-        my_achievements, target_achievements = await asyncio.gather(my_ach_task, target_ach_task)
+        target_ach_task = asyncio.create_task(
+            self._aggregate_achievements(target_id, target_games)
+        )
+        my_achievements, target_achievements = await asyncio.gather(
+            my_ach_task, target_ach_task
+        )
 
         if not common_games:
             yield event.plain_result("双方似乎没有共同拥有的游戏。")
@@ -636,12 +793,12 @@ class SteamGamePlugin(Star):
             "me": {
                 "personaname": my_summary.get("personaname", "Player 1"),
                 "avatarfull": my_summary.get("avatarfull", ""),
-                "count": len(my_games)
+                "count": len(my_games),
             },
             "target": {
                 "personaname": target_summary.get("personaname", "Player 2"),
                 "avatarfull": target_summary.get("avatarfull", ""),
-                "count": len(target_games)
+                "count": len(target_games),
             },
             "common_games": top_common,
             "common_count": len(common_games),
@@ -667,31 +824,27 @@ class SteamGamePlugin(Star):
                     if target_achievements.get("total")
                     else f"{target_achievements.get('unlocked', 0)}/-",
                 ),
-            ]
+            ],
         }
-        
+
         template_path = self.templates_dir / "compare.html"
         if not template_path.exists():
-             yield event.plain_result("对比模板尚未上传。")
-             return
+            yield event.plain_result("对比模板尚未上传。")
+            return
         with template_path.open("r", encoding="utf-8") as f:
             template_content = f.read()
-        img_url = await self.html_render(
+        img_url = await self._render_html_local(
             template_content,
             render_data,
-            options={
-                "width": 800,
-                "full_page": True,
-                "omit_background": True,
-                "type": "jpeg",
-                "quality": self.image_quality
-            }
+            width=800,
+            image_type="jpeg",
+            quality=self.image_quality,
         )
         yield event.image_result(img_url)
 
     @filter.command("steam推荐", prefix_optional=True)
     async def steam_recommend(self, event: AstrMessageEvent, arg: str = ""):
-        '''群友热门游戏推荐 (/steam推荐 [@用户])'''
+        """群友热门游戏推荐 (/steam推荐 [@用户])"""
         group_id = event.get_group_id()
         if not group_id:
             yield event.plain_result("请在群聊中使用该指令。")
@@ -714,7 +867,9 @@ class SteamGamePlugin(Star):
 
         user_appids = {g.get("appid") for g in user_games}
 
-        others = [sid for sid in group_binding_map.values() if sid and sid != target_steam_id]
+        others = [
+            sid for sid in group_binding_map.values() if sid and sid != target_steam_id
+        ]
         if not others:
             yield event.plain_result("群内没有其他已绑定的用户，暂无法推荐。")
             return
@@ -747,7 +902,9 @@ class SteamGamePlugin(Star):
                 entry["owners"].add(steam_id)
 
         if not recommendations:
-            yield event.plain_result("未找到可推荐的游戏，可能你已经拥有群友的热门作品。")
+            yield event.plain_result(
+                "未找到可推荐的游戏，可能你已经拥有群友的热门作品。"
+            )
             return
 
         top_items = sorted(
@@ -762,7 +919,9 @@ class SteamGamePlugin(Star):
 
         async def get_summary_cached(steam_id: str):
             if steam_id not in summary_cache:
-                summary_cache[steam_id] = await self.steam_api.get_player_summaries(steam_id) or {}
+                summary_cache[steam_id] = (
+                    await self.steam_api.get_player_summaries(steam_id) or {}
+                )
                 self._ensure_static_avatar(summary_cache[steam_id])
             return summary_cache[steam_id]
 
@@ -776,23 +935,27 @@ class SteamGamePlugin(Star):
                 avatar = summary.get("avatarfull")
                 if avatar:
                     owner_avatars.append(avatar)
-            render_recommendations.append({
-                "name": item["name"],
-                "score": item["score"],
-                "playtime": f"{hours:.1f}",
-                "owners": len(item["owners"]),
-                "owner_avatars": owner_avatars,
-                "cover_uri": item.get("cover_uri"),
-            })
+            render_recommendations.append(
+                {
+                    "name": item["name"],
+                    "score": item["score"],
+                    "playtime": f"{hours:.1f}",
+                    "owners": len(item["owners"]),
+                    "owner_avatars": owner_avatars,
+                    "cover_uri": item.get("cover_uri"),
+                }
+            )
 
         target_summary = await get_summary_cached(target_steam_id)
         self._ensure_static_avatar(target_summary)
         render_data = {
             "target": {
-                "personaname": target_summary.get("personaname", event.get_sender_name()),
+                "personaname": target_summary.get(
+                    "personaname", event.get_sender_name()
+                ),
                 "avatar": target_summary.get("avatarfull", ""),
             },
-            "recommendations": render_recommendations
+            "recommendations": render_recommendations,
         }
 
         template_path = self.templates_dir / "recommend.html"
@@ -802,22 +965,18 @@ class SteamGamePlugin(Star):
         with template_path.open("r", encoding="utf-8") as f:
             template_content = f.read()
 
-        img_url = await self.html_render(
+        img_url = await self._render_html_local(
             template_content,
             render_data,
-            options={
-                "width": 800,
-                "full_page": True,
-                "omit_background": True,
-                "type": "jpeg",
-                "quality": self.image_quality
-            }
+            width=800,
+            image_type="jpeg",
+            quality=self.image_quality,
         )
         yield event.image_result(img_url)
 
     @filter.command("steam联动", prefix_optional=True)
     async def steam_network(self, event: AstrMessageEvent):
-        '''群内 Steam 好友联动与同玩提醒'''
+        """群内 Steam 好友联动与同玩提醒"""
         group_id = event.get_group_id()
         if not group_id:
             yield event.plain_result("请在群聊中使用该指令。")
@@ -828,7 +987,9 @@ class SteamGamePlugin(Star):
             yield event.plain_result("本群暂无绑定信息。")
             return
 
-        steam_to_user = {steam: user for user, steam in group_binding_map.items() if steam}
+        steam_to_user = {
+            steam: user for user, steam in group_binding_map.items() if steam
+        }
         steam_ids = list(steam_to_user.keys())
         if len(steam_ids) < 2:
             yield event.plain_result("至少需要两位已绑定用户才能分析联动。")
@@ -838,10 +999,15 @@ class SteamGamePlugin(Star):
 
         async def get_summary_cached(steam_id: str):
             if steam_id not in summary_cache:
-                summary_cache[steam_id] = await self.steam_api.get_player_summaries(steam_id) or {}
+                summary_cache[steam_id] = (
+                    await self.steam_api.get_player_summaries(steam_id) or {}
+                )
             return summary_cache[steam_id]
 
-        friend_tasks = {sid: asyncio.create_task(self.steam_api.get_friend_list(sid)) for sid in steam_ids}
+        friend_tasks = {
+            sid: asyncio.create_task(self.steam_api.get_friend_list(sid))
+            for sid in steam_ids
+        }
 
         playing_map: Dict[str, Dict[str, Any]] = {}
         for sid in steam_ids:
@@ -892,7 +1058,7 @@ class SteamGamePlugin(Star):
 
     @filter.command("steam排行", prefix_optional=True)
     async def steam_top(self, event: AstrMessageEvent, dimension: str = "游戏数"):
-        '''群内排行 (/steam排行 [游戏数/时长])'''
+        """群内排行 (/steam排行 [游戏数/时长])"""
         group_id = event.get_group_id()
         if not group_id:
             yield event.plain_result("请在群聊中使用该指令。")
@@ -907,88 +1073,90 @@ class SteamGamePlugin(Star):
             "数量": "count",
             "时长": "time",
             "时间": "time",
-            "肝度": "time"
+            "肝度": "time",
         }
         sort_by = dim_map.get(dimension, "count")
         group_binding_map = self.group_bindings.get(group_id, {})
         if not group_binding_map:
-            yield event.plain_result("本群尚无用户绑定 Steam ID。请先使用 /绑定steam <SteamID64> 或在本群输入 /绑定steam 同步已有绑定。")
+            yield event.plain_result(
+                "本群尚无用户绑定 Steam ID。请先使用 /绑定steam <SteamID64> 或在本群输入 /绑定steam 同步已有绑定。"
+            )
             return
 
         title = "群内 Steam 游戏数排行" if sort_by == "count" else "群内 Steam 肝帝排行"
         yield event.plain_result(f"正在统计{title}，请稍候...")
 
         rank_data = []
-        
+
         tasks = []
         user_ids = []
-        
+
         for user_id, steam_id in group_binding_map.items():
             tasks.append(self.steam_api.get_owned_games(steam_id))
             user_ids.append(user_id)
-            
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         # Also fetch summaries for avatars
-        summary_tasks = [self.steam_api.get_player_summaries(group_binding_map[uid]) for uid in user_ids]
+        summary_tasks = [
+            self.steam_api.get_player_summaries(group_binding_map[uid])
+            for uid in user_ids
+        ]
         summaries = await asyncio.gather(*summary_tasks, return_exceptions=True)
-        
+
         for i, games in enumerate(results):
             if isinstance(games, list):
                 user_id = user_ids[i]
                 summary = summaries[i] if isinstance(summaries[i], dict) else {}
                 self._ensure_static_avatar(summary)
-                
+
                 # Calculate metrics
                 game_count = len(games)
                 total_minutes = sum(g.get("playtime_forever", 0) for g in games)
-                
+
                 # Sort games by playtime for display
                 games.sort(key=lambda x: x.get("playtime_forever", 0), reverse=True)
-                
+
                 top_games = games[:5]
                 await self._decorate_games_with_cover(top_games, "poster")
 
-                rank_data.append({
-                    "user_id": user_id,
-                    "name": summary.get("personaname", f"User {user_id}"),
-                    "avatar": summary.get("avatarfull", ""),
-                    "count": game_count,
-                    "time_minutes": total_minutes,
-                    "time_str": self._format_playtime(total_minutes),
-                    "top_games": top_games # Top 5 games for display
-                })
-        
+                rank_data.append(
+                    {
+                        "user_id": user_id,
+                        "name": summary.get("personaname", f"User {user_id}"),
+                        "avatar": summary.get("avatarfull", ""),
+                        "count": game_count,
+                        "time_minutes": total_minutes,
+                        "time_str": self._format_playtime(total_minutes),
+                        "top_games": top_games,  # Top 5 games for display
+                    }
+                )
+
         # Sort
         if sort_by == "time":
             rank_data.sort(key=lambda x: x["time_minutes"], reverse=True)
         else:
             rank_data.sort(key=lambda x: x["count"], reverse=True)
-        
+
         if not rank_data:
             yield event.plain_result("无法获取排行数据。")
             return
-            
+
         render_data = {
             "title": title,
             "sort_by": sort_by,
-            "ranks": rank_data[:10] # Top 10
+            "ranks": rank_data[:10],  # Top 10
         }
-        
+
         template_path = self.templates_dir / "group_rank.html"
         with template_path.open("r", encoding="utf-8") as f:
             template_content = f.read()
-        
-        img_url = await self.html_render(
+
+        img_url = await self._render_html_local(
             template_content,
             render_data,
-            options={
-                "width": 800,
-                "full_page": True,
-                "omit_background": True,
-                "type": "jpeg",
-                "quality": self.image_quality
-            }
+            width=800,
+            image_type="jpeg",
+            quality=self.image_quality,
         )
         yield event.image_result(img_url)
-
