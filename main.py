@@ -1132,6 +1132,34 @@ class SteamGamePlugin(Star):
 
         return f"✅ Steam账号绑定成功！\n\n用户：{player_name}\nSteam64ID：{steam_id}\n\n您现在可以使用 `/steam动态`、`/steam游戏库` 等命令查看自己的Steam信息，也可以让AI助手帮您查询游戏库和动态。"
 
+    @llm_tool(name="get_group_steam_bindings")
+    async def get_group_steam_bindings(self, event: AstrMessageEvent) -> str:
+        """获取当前群聊中已绑定Steam账号的用户列表。当用户询问群里有谁绑定了Steam、群友Steam账号列表、或者需要了解群内Steam用户情况时调用此工具。
+
+        Args:
+            无需参数
+
+        Returns:
+            str: 群内已绑定Steam的用户列表，包含用户ID和对应的Steam64ID
+        """
+        group_id = event.get_group_id()
+        if not group_id:
+            return "此工具只能在群聊中使用，当前不在群聊环境中。"
+
+        group_binding_map = self.group_bindings.get(group_id, {})
+        if not group_binding_map:
+            return f"当前群聊（{group_id}）暂无用户绑定Steam账号。用户可以使用 `/绑定steam <Steam64ID>` 进行绑定。"
+
+        lines = [f"📋 群聊 {group_id} 已绑定Steam的用户列表："]
+        lines.append(f"共 {len(group_binding_map)} 人已绑定：")
+        lines.append("")
+        lines.append("| 用户ID | Steam64ID |")
+        lines.append("|--------|-----------|")
+        for user_id, steam_id in group_binding_map.items():
+            lines.append(f"| {user_id} | {steam_id} |")
+
+        return "\n".join(lines)
+
     @filter.command("steam对比")
     async def steam_compare(self, event: AstrMessageEvent, target: str = ""):
         """对比两人游戏库
