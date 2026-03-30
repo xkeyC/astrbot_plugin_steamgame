@@ -510,24 +510,53 @@ class SteamGamePlugin(Star):
 
     @filter.command("绑定steam")
     async def bind(self, event: AstrMessageEvent, steam_id: str = ""):
-        """绑定 Steam ID（在新的群聊中可不填参数同步已有绑定）"""
+        """绑定 Steam ID（在新的群聊中可不填参数同步已有绑定）
+        
+        管理员可以使用: /绑定steam <SteamID64> @用户 来为他人绑定
+        """
         user_id = str(event.get_sender_id())
         group_id = event.get_group_id()
         message = ""
+        bind_user_id = user_id
 
         data_changed = False
+        target_user_id = None
+
+        for component in event.message_obj.message:
+            if isinstance(component, Comp.At):
+                target_user_id = str(component.qq)
+                break
 
         if steam_id:
-            # Validate Steam ID (must be 64-bit integer, usually 17 digits)
+            if target_user_id:
+                if not event.is_admin():
+                    yield event.plain_result("只有管理员才能为他人绑定 Steam ID。")
+                    return
+                bind_user_id = target_user_id
+                bind_user_name = f"用户 {target_user_id}"
+            else:
+                bind_user_name = "你"
+            
             if not steam_id.isdigit() or len(steam_id) != 17:
                 yield event.plain_result(
                     "绑定失败：请输入正确的 17 位 Steam ID 64 (例如 76561198000000000)。"
                 )
                 return
-            self.bindings[user_id] = steam_id
+            self.bindings[bind_user_id] = steam_id
             data_changed = True
-            message = f"绑定成功！已关联 Steam ID: {steam_id}"
+            message = f"绑定成功！已为 {bind_user_name} 关联 Steam ID: {steam_id}"
         else:
+            if target_user_id:
+                if not event.is_admin():
+                    yield event.plain_result("只有管理员才能查询他人的绑定状态。")
+                    return
+                target_steam_id = self.bindings.get(target_user_id)
+                if target_steam_id:
+                    yield event.plain_result(f"用户 {target_user_id} 已绑定 Steam ID: {target_steam_id}")
+                else:
+                    yield event.plain_result(f"用户 {target_user_id} 尚未绑定 Steam ID。")
+                return
+            
             if user_id not in self.bindings:
                 yield event.plain_result(
                     "你还没有绑定 Steam ID，请使用 /绑定steam <SteamID64>。"
@@ -536,9 +565,9 @@ class SteamGamePlugin(Star):
             steam_id = self.bindings[user_id]
             message = "已将现有绑定同步至当前群聊。"
 
-        if self._sync_group_binding_value(user_id):
+        if self._sync_group_binding_value(bind_user_id):
             data_changed = True
-        if self._link_user_to_group(user_id, group_id):
+        if self._link_user_to_group(bind_user_id, group_id):
             data_changed = True
         if data_changed:
             self._save_bindings()
@@ -1132,6 +1161,35 @@ class SteamGamePlugin(Star):
 
         return f"✅ Steam账号绑定成功！\n\n用户：{player_name}\nSteam64ID：{steam_id}\n\n您现在可以使用 `/steam动态`、`/steam游戏库` 等命令查看自己的Steam信息，也可以让AI助手帮您查询游戏库和动态。"
 
+    @filter.command("steam绑定列表")
+    async def list_bindings(self, event: AstrMessageEvent):
+        """查询当前群绑定关系
+        
+        用法:
+        /steam绑定列表 - 查询当前群已绑定的用户列表
+        """
+        group_id = event.get_group_id()
+        if not group_id:
+            yield event.plain_result("此命令只能在群聊中使用。")
+            return
+        
+        if self._link_user_to_group(str(event.get_sender_id()), group_id):
+            self._save_bindings()
+        
+        all_bindings = self.bindings
+        
+        if not all_bindings:
+            yield event.plain_result("暂无任何绑定记录。")
+            return
+        
+        lines = [f"📋 当前群绑定列表 (共 {len(all_bindings)} 人已绑定):"]
+        lines.append("")
+        
+        for user_id, steam_id in all_bindings.items():
+            lines.append(f"  用户 {user_id} -> {steam_id}")
+        
+        yield event.plain_result("\n".join(lines))
+
     @llm_tool(name="get_group_steam_bindings")
     async def get_group_steam_bindings(self, event: AstrMessageEvent) -> str:
         """获取当前群聊中已绑定Steam账号的用户列表。当用户询问群里有谁绑定了Steam、群友Steam账号列表、或者需要了解群内Steam用户情况时调用此工具。
@@ -1146,16 +1204,19 @@ class SteamGamePlugin(Star):
         if not group_id:
             return "此工具只能在群聊中使用，当前不在群聊环境中。"
 
-        group_binding_map = self.group_bindings.get(group_id, {})
-        if not group_binding_map:
-            return f"当前群聊（{group_id}）暂无用户绑定Steam账号。用户可以使用 `/绑定steam <Steam64ID>` 进行绑定。"
+        if self._link_user_to_group(str(event.get_sender_id()), group_id):
+            self._save_bindings()
 
-        lines = [f"📋 群聊 {group_id} 已绑定Steam的用户列表："]
-        lines.append(f"共 {len(group_binding_map)} 人已绑定：")
+        all_bindings = self.bindings
+        
+        if not all_bindings:
+            return f"暂无任何绑定记录。用户可以使用 `/绑定steam <Steam64ID>` 进行绑定。"
+
+        lines = [f"📋 Steam 绑定列表 (共 {len(all_bindings)} 人已绑定):"]
         lines.append("")
         lines.append("| 用户ID | Steam64ID |")
         lines.append("|--------|-----------|")
-        for user_id, steam_id in group_binding_map.items():
+        for user_id, steam_id in all_bindings.items():
             lines.append(f"| {user_id} | {steam_id} |")
 
         return "\n".join(lines)
